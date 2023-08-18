@@ -19,6 +19,8 @@ jobs:
 
       - run: |
           sudo cat /etc/systemd/resolved.conf
+
+      - run: |
           sudo cat /etc/resolv.conf
       #- name: Build
       #  run: go build -o ci-dns-proxy
