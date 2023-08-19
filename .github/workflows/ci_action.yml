@@ -12,7 +12,13 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v2
         with:
-          go-version: 1.16
+          go-version: 1.21
+
+      - name: Build
+        run: go build -o ci-dns-proxy
+
+      - name: Run
+        run: sudo ./ci-dns-proxy
 
       - name: Check systemd-resolved
         run: systemctl status systemd-resolved
@@ -22,5 +28,3 @@ jobs:
 
       - run: |
           sudo cat /etc/resolv.conf
-      #- name: Build
-      #  run: go build -o ci-dns-proxy
