@@ -20,9 +20,6 @@ jobs:
       - name: Run
         run: sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
 
-      - name: Check systemd-resolved
-        run: systemctl status systemd-resolved
-
       - run: |
           sudo cat /etc/systemd/resolved.conf
 
