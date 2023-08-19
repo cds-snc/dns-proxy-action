@@ -22,7 +22,7 @@ jobs:
           sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
           sleep 3
         env:
-          DNS_PROXY_BLOCKLIST: 
+          DNS_PROXY_BLOCKLIST: releases.hashicorp.com"
 
       - run: |
           sudo cat /etc/systemd/resolved.conf
