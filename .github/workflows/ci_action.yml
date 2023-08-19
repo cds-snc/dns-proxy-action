@@ -19,7 +19,7 @@ jobs:
 
       - name: Run
         run: |
-          sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
+          sudo -E ./ci-dns-proxy > /tmp/dns.out 2>&1 &
           sleep 3
         env:
           DNS_PROXY_BLOCKLIST: releases.hashicorp.com
