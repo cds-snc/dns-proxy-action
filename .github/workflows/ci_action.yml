@@ -18,7 +18,9 @@ jobs:
         run: go build -o ci-dns-proxy
 
       - name: Run
-        run: sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
+        run: |
+          sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
+          sleep 3
 
       - run: |
           sudo cat /etc/systemd/resolved.conf
