@@ -18,7 +18,7 @@ jobs:
         run: go build -o ci-dns-proxy
 
       - name: Run
-        run: sudo ./ci-dns-proxy
+        run: sudo ./ci-dns-proxy > /tmp/dns.out 2>&1 &
 
       - name: Check systemd-resolved
         run: systemctl status systemd-resolved
@@ -28,3 +28,9 @@ jobs:
 
       - run: |
           sudo cat /etc/resolv.conf
+
+      - name: Check DNS
+        run: dig google.com
+
+      - name: Cat DNS
+        run: cat /tmp/dns.out

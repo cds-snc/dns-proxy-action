@@ -93,6 +93,7 @@ func replaceResolveDNS(config *Config) {
 		if err != nil {
 			log.Errorln("Error restarting systemd-resolved")
 		}
+		log.Debugln("Restarted systemd-resolved")
 
 		// Fush the DNS cache
 		cmd = exec.Command("/bin/sh", "-c", "sudo resolvectl flush-caches")
@@ -101,5 +102,5 @@ func replaceResolveDNS(config *Config) {
 		if err != nil {
 			log.Errorln("Error flushing DNS cache")
 		}
-	}
+		log.Debugln("Flushed DNS cache")
 }
