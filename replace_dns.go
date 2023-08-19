@@ -103,4 +103,5 @@ func replaceResolveDNS(config *Config) {
 			log.Errorln("Error flushing DNS cache")
 		}
 		log.Debugln("Flushed DNS cache")
+	}
 }
