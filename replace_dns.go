@@ -71,11 +71,12 @@ func replaceResolveDNS(config *Config) {
 
 	// Content for systemd
 	if systemDRunning {
-		fileContent = "[Resolve]\nDNS=" + config.Host + "\nDomains=~.\n"
+		fileContent = "'[Resolve]\nDNS=" + config.Host + "\nDomains=~.\n'"
 	} else {
 		fileContent = "nameserver " + config.Host
 	}
-
+	log.Debugln("Writing to " + configPath)
+	log.Debugln(fileContent)
 	// Write new content
 	cmd = exec.Command("sudo", "sh", "-c", "echo "+fileContent+" > "+configPath)
 	cmd.Run()
