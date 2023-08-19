@@ -53,16 +53,6 @@ func initConfig() *Config {
 		configuration.LogLevel = log.InfoLevel
 	}
 
-	// Print config
-	log.WithFields(log.Fields{
-		"Host":           configuration.Host,
-		"Port":           configuration.Port,
-		"Blocklist":      configuration.BlockList,
-		"Safelist":       configuration.SafeList,
-		"UpstreamServer": configuration.UpstreamServer,
-		"LogLevel":       configuration.LogLevel,
-	}).Debug("Configuration")
-
 	return &configuration
 
 }
