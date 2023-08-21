@@ -1,26 +1,25 @@
 package main
 
-import (
-	log "github.com/sirupsen/logrus"
-)
-
 func main() {
 	// Initialize configuration
 	config := initConfig()
-	log.SetLevel(config.LogLevel)
 
 	// Print config
-	log.WithFields(log.Fields{
-		"Host":           config.Host,
-		"Port":           config.Port,
-		"Blocklist":      config.BlockList,
-		"Safelist":       config.SafeList,
-		"UpstreamServer": config.UpstreamServer,
-		"LogLevel":       config.LogLevel,
-	}).Debugln("Configuration")
+	config.Logger.Debug().
+		Str("host", config.Host).
+		Int64("port", config.Port).
+		Strs("blocklist", config.BlockList).
+		Strs("safelist", config.SafeList).
+		Str("upstream_server", config.UpstreamServer).
+		Bool("forward_to_sentinel", config.ForwardToSentinel).
+		Bool("overwrite_config", config.OverwriteConfig).
+		Str("query_log_file_path", config.QueryLogFilePath).
+		Msg("Configuration")
 
 	// Install the proxy server as the default DNS resolver
-	replaceDNS(config)
+	if config.OverwriteConfig {
+		replaceDNS(config)
+	}
 
 	// Start the DNS proxy server
 	dnsProxyServer(config)

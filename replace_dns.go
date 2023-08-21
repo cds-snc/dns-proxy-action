@@ -3,8 +3,6 @@ package main
 import (
 	"os"
 	"os/exec"
-
-	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -39,7 +37,7 @@ func replaceResolveDNS(config *Config) {
 	}
 
 	if !systemDRunning && !resolvePathExists {
-		log.Fatalln("No DNS configuration found")
+		config.Logger.Fatal().Msg("No DNS config found")
 	}
 
 	// Priority: systemd-resolved > /etc/resolv.conf
@@ -56,9 +54,9 @@ func replaceResolveDNS(config *Config) {
 
 		err := cmd.Run()
 		if err != nil {
-			log.Errorln("Error stopping systemd-resolved:", err)
+			config.Logger.Error().Err(err).Msg("Error stopping systemd-resolved")
 		}
-		log.Debugln("Stopped systemd-resolved")
+		config.Logger.Debug().Msg("Stopped systemd-resolved")
 	}
 
 	// Backup config file
@@ -66,7 +64,7 @@ func replaceResolveDNS(config *Config) {
 
 	err := cmd.Run()
 	if err != nil {
-		log.Errorln("Error backing up", configPath, ":", err)
+		config.Logger.Error().Err(err).Msg("Error backing up " + configPath)
 	}
 
 	// Content for systemd
@@ -75,16 +73,16 @@ func replaceResolveDNS(config *Config) {
 	} else {
 		fileContent = "nameserver " + config.Host
 	}
-	log.Debugln("Writing to " + configPath)
-	log.Debugln(fileContent)
+	config.Logger.Debug().Msg("Writing to " + configPath + ":")
+
 	// Write new content
 	cmd = exec.Command("sudo", "sh", "-c", "echo "+fileContent+" > "+configPath)
 	cmd.Run()
 
 	if err != nil {
-		log.Errorln("Error writing to "+configPath+":", err)
+		config.Logger.Error().Err(err).Msg("Error writing to " + configPath)
 	}
-	log.Debugln("Wrote to " + configPath)
+	config.Logger.Debug().Msg("Wrote to " + configPath)
 
 	// Restart SystemD
 	if systemDRunning {
@@ -92,17 +90,17 @@ func replaceResolveDNS(config *Config) {
 
 		err = cmd.Run()
 		if err != nil {
-			log.Errorln("Error restarting systemd-resolved")
+			config.Logger.Error().Err(err).Msg("Error restarting systemd-resolved")
 		}
-		log.Debugln("Restarted systemd-resolved")
+		config.Logger.Debug().Msg("Restarted systemd-resolved")
 
 		// Fush the DNS cache
 		cmd = exec.Command("/bin/sh", "-c", "sudo resolvectl flush-caches")
 
 		err = cmd.Run()
 		if err != nil {
-			log.Errorln("Error flushing DNS cache")
+			config.Logger.Error().Err(err).Msg("Error flushing DNS cache")
 		}
-		log.Debugln("Flushed DNS cache")
+		config.Logger.Debug().Msg("Flushed DNS cache")
 	}
 }

@@ -1,18 +1,26 @@
 package main
 
 import (
-	log "github.com/sirupsen/logrus"
+	"os"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	BlockList      []string
-	Host           string
-	LogLevel       log.Level
-	Port           int64
-	SafeList       []string
-	UpstreamServer string
+	BlockList               []string
+	ForwardToSentinel       bool
+	Host                    string
+	LogAnalyticsWorkspaceId string
+	LogAnalyticsSharedKey   string
+	LogAnalyticsTable       string
+	LogLevel                zerolog.Level
+	Logger                  zerolog.Logger
+	OverwriteConfig         bool
+	Port                    int64
+	QueryLogFilePath        string
+	SafeList                []string
+	UpstreamServer          string
 }
 
 func initConfig() *Config {
@@ -28,30 +36,51 @@ func initConfig() *Config {
 	viper.SetDefault("Safelist", []string{})
 	viper.SetDefault("UpstreamServer", "8.8.8.8")
 	viper.SetDefault("LogLevel", "debug")
+	viper.SetDefault("ForwardToSentinel", false)
+	viper.SetDefault("LogAnalyticsWorkspaceId", "")
+	viper.SetDefault("LogAnalyticsSharedKey", "")
+	viper.SetDefault("LogAnalyticsTable", "GitHubMetadata_CI_DNS_Queries")
+	viper.SetDefault("OverwriteConfig", true)
+	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
 
 	configuration.Host = viper.GetString("Host")
 	configuration.Port = viper.GetInt64("Port")
 	configuration.BlockList = viper.GetStringSlice("Blocklist")
 	configuration.SafeList = viper.GetStringSlice("Safelist")
 	configuration.UpstreamServer = viper.GetString("UpstreamServer")
+	configuration.ForwardToSentinel = viper.GetBool("ForwardToSentinel")
+	configuration.LogAnalyticsWorkspaceId = viper.GetString("LogAnalyticsWorkspaceId")
+	configuration.LogAnalyticsSharedKey = viper.GetString("LogAnalyticsSharedKey")
+	configuration.LogAnalyticsTable = viper.GetString("LogAnalyticsTable")
+	configuration.OverwriteConfig = viper.GetBool("OverwriteConfig")
+	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
 
 	// Log Level switch
 	switch viper.GetString("LogLevel") {
 	case "debug":
-		configuration.LogLevel = log.DebugLevel
+		configuration.LogLevel = zerolog.DebugLevel
 	case "info":
-		configuration.LogLevel = log.InfoLevel
+		configuration.LogLevel = zerolog.InfoLevel
 	case "warn":
-		configuration.LogLevel = log.WarnLevel
+		configuration.LogLevel = zerolog.WarnLevel
 	case "error":
-		configuration.LogLevel = log.ErrorLevel
+		configuration.LogLevel = zerolog.ErrorLevel
 	case "fatal":
-		configuration.LogLevel = log.FatalLevel
+		configuration.LogLevel = zerolog.FatalLevel
 	case "panic":
-		configuration.LogLevel = log.PanicLevel
+		configuration.LogLevel = zerolog.PanicLevel
 	default:
-		configuration.LogLevel = log.InfoLevel
+		configuration.LogLevel = zerolog.InfoLevel
 	}
+
+	zerolog.SetGlobalLevel(configuration.LogLevel)
+
+	// Create multiple output steams for zerolog
+	multi := zerolog.MultiLevelWriter(QueryLogger{config: &configuration}, SentinelForwarder{config: &configuration}, os.Stdout)
+
+	logger := zerolog.New(multi).With().Timestamp().Logger()
+
+	configuration.Logger = logger
 
 	return &configuration
 

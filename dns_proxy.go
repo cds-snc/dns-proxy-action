@@ -6,8 +6,6 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-
 	"github.com/google/gopacket"
 	layers "github.com/google/gopacket/layers"
 )
@@ -34,19 +32,19 @@ func dnsProxyServer(config *Config) {
 	listenAddr := fmt.Sprintf("%s:%d", config.Host, config.Port)
 	um, err := net.ListenPacket("udp", listenAddr)
 	if err != nil {
-		log.Fatalln("Error creating UDP listener:", err)
+		config.Logger.Error().Err(err).Msg("Error listening on UDP socket")
 		return
 	}
 	defer um.Close()
 
-	log.Infoln("DNS proxy server listening on", listenAddr)
+	config.Logger.Info().Msg("DNS proxy server listening on " + listenAddr)
 
 	// Loop to handle incoming DNS requests
 	for {
 		buf := make([]byte, 65535)
 		n, clientAddr, err := um.ReadFrom(buf)
 		if err != nil {
-			log.Warningln("Error reading from UDP connection:", err)
+			config.Logger.Warn().Err(err).Msg("Error reading from UDP connection")
 			continue
 		}
 
@@ -72,26 +70,42 @@ func filterDns(request *layers.DNS, config *Config) bool {
 
 	// Check if the DNS request is for a domain we want to block
 	domain := string(request.Questions[0].Name)
-	log.Debugln("DNS request for", domain)
+	config.Logger.Info().
+		Str("domain", domain).
+		Str("action", "query").
+		Msg("DNS request")
 
 	// Check if we are using a safelist or a blocklist
 	if len(config.SafeList) > 0 {
 		for _, safeDomain := range config.SafeList {
 			if checkWildcard(safeDomain, domain) {
-				log.Debugln("DNS request for", domain, "allowed")
+				config.Logger.Info().
+					Str("domain", domain).
+					Str("action", "passed").
+					Msg("DNS request")
 				return false
 			}
 		}
-		log.Warnln("DNS request for", domain, "blocked")
+		config.Logger.Info().
+			Str("domain", domain).
+			Str("action", "blocked").
+			Msg("DNS request")
 		return true
 	} else {
 		for _, blockedDomain := range config.BlockList {
 			if checkWildcard(blockedDomain, domain) {
-				log.Warnln("DNS request for", domain, "blocked")
+				config.Logger.Info().
+					Str("domain", domain).
+					Str("action", "blocked").
+					Msg("DNS request")
 				return true
 			}
 		}
 	}
+	config.Logger.Info().
+		Str("domain", domain).
+		Str("action", "passed").
+		Msg("DNS request")
 	return false
 }
 
@@ -122,14 +136,14 @@ func proxyRequest(um *net.UDPConn, clientAddr net.Addr, request *layers.DNS, con
 		)
 		_, err := um.WriteTo(responseBuf.Bytes(), clientAddr)
 		if err != nil {
-			log.Warningln("Error sending DNS response to client:", err)
+			config.Logger.Warn().Err(err).Msg("Error sending DNS response to client")
 		}
 	} else {
 		// Create a connection to the upstream DNS server
 		upstreamAddr := fmt.Sprintf("%s:53", config.UpstreamServer)
 		upstreamConn, err := net.Dial("udp", upstreamAddr)
 		if err != nil {
-			log.Warningln("Error connecting to upstream DNS server:", err)
+			config.Logger.Warn().Err(err).Msg("Error connecting to upstream DNS server")
 			return
 		}
 		defer upstreamConn.Close()
@@ -141,7 +155,7 @@ func proxyRequest(um *net.UDPConn, clientAddr net.Addr, request *layers.DNS, con
 		)
 		_, err = upstreamConn.Write(requestBuf.Bytes())
 		if err != nil {
-			log.Warningln("Error sending DNS request to upstream:", err)
+			config.Logger.Warn().Err(err).Msg("Error sending DNS request to upstream")
 			return
 		}
 
@@ -152,7 +166,7 @@ func proxyRequest(um *net.UDPConn, clientAddr net.Addr, request *layers.DNS, con
 		responseBuf := make([]byte, 65535)
 		n, err := upstreamConn.Read(responseBuf)
 		if err != nil {
-			log.Warningln("Error reading DNS response from upstream:", err)
+			config.Logger.Warn().Err(err).Msg("Error reading DNS response from upstream")
 			return
 		}
 
@@ -163,7 +177,7 @@ func proxyRequest(um *net.UDPConn, clientAddr net.Addr, request *layers.DNS, con
 			// Send the DNS response back to the client
 			_, err := um.WriteTo(dnsResponse.BaseLayer.Contents, clientAddr)
 			if err != nil {
-				log.Warningln("Error sending DNS response to client:", err)
+				config.Logger.Warn().Err(err).Msg("Error sending DNS response to client")
 			}
 		}
 
