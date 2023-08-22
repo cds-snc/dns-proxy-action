@@ -9,18 +9,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
-      - name: Setup Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.21
-
-      - name: Build
-        run: go build -o ci-dns-proxy
 
       - name: Run
-        run: |
-          sudo -E ./ci-dns-proxy > /tmp/dns.out 2>&1 &
-          sleep 3
+        uses: ./ # Uses an action in the root directory
         env:
           DNS_PROXY_BLOCKLIST: releases.hashicorp.com
           DNS_PROXY_UPSTREAM: 1.1.1.1
@@ -32,7 +23,7 @@ jobs:
         uses: cds-snc/terraform-tools-setup@v1
 
       - name: Cat DNS
-        run: cat /tmp/dns.out
+        run: cat /tmp/dns-proxy-action.out
 
       - name: cat output file
         run: cat /tmp/dns_query.log

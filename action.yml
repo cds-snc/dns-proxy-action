@@ -1,0 +1,5 @@
+name: "DNS Proxy Action"
+description: "Starts a DNS Proxy"
+runs:
+  using: "docker"
+  image: "Dockerfile"

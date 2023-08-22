@@ -7,10 +7,15 @@
 	"containerEnv": {
 		"SHELL": "/bin/zsh"
 	},
+	"features": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
+			"packages": "dnsutils"
+		}
+	},
 	"extensions": [
 		"redhat.vscode-yaml",
 		"github.copilot"
 	],
-	"remoteUser": "vscode",
-	"pos"
+	"remoteUser": "vscode"
 }
