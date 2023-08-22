@@ -1,0 +1,28 @@
+name: CI DNS Proxy with Docker Action
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci-dns-proxy-with-docker-action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Run
+        uses: ./ # Uses an action in the root directory
+
+      - name: Report deployment to Sentinel
+        uses: cds-snc/sentinel-forward-data-action@main
+        with:
+          input_data: '{"product": "dns-proxy-action", "version": "${{ github.sha }}", "repository": "${{ github.repository }}"}'
+          log_type: TestData
+          log_analytics_workspace_id: ${{ secrets.LOG_ANALYTICS_WORKSPACE_ID }}
+          log_analytics_workspace_key: ${{ secrets.LOG_ANALYTICS_WORKSPACE_KEY }}
+
+      - name: Cat DNS
+        run: cat /tmp/dns-proxy-action.out
+
+      - name: cat output file
+        run: cat /tmp/dns_query.log
