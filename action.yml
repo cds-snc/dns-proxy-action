@@ -1,5 +1,9 @@
 name: "DNS Proxy Action"
 description: "Starts a DNS Proxy"
 runs:
-  using: "docker"
-  image: "Dockerfile"
+  using: "composite"
+  steps:
+    - run: sudo -E $GITHUB_ACTION_PATH/release/latest/dns-proxy-action > /tmp/dns-proxy-action.out 2>&1 &
+      shell: bash
+    - run: sleep 3
+      shell: bash
