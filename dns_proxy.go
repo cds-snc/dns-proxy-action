@@ -70,6 +70,12 @@ func filterDns(request *layers.DNS, config *Config) bool {
 
 	// Check if the DNS request is for a domain we want to block
 	domain := string(request.Questions[0].Name)
+
+	// Check if we are forwarding to Sentinel and ignore the Sentinel domain
+	if config.ForwardToSentinel && domain == config.LogAnalyticsWorkspaceId+".ods.opinsights.azure.com" {
+		return false
+	}
+
 	config.Logger.Info().
 		Str("domain", domain).
 		Str("action", "query").

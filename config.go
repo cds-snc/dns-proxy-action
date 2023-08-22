@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"github.com/spf13/viper"
@@ -35,7 +36,7 @@ func initConfig() *Config {
 	viper.SetDefault("Blocklist", []string{})
 	viper.SetDefault("Safelist", []string{})
 	viper.SetDefault("UpstreamServer", "8.8.8.8")
-	viper.SetDefault("LogLevel", "debug")
+	viper.SetDefault("LogLevel", "info")
 	viper.SetDefault("ForwardToSentinel", false)
 	viper.SetDefault("LogAnalyticsWorkspaceId", "")
 	viper.SetDefault("LogAnalyticsSharedKey", "")
@@ -56,7 +57,7 @@ func initConfig() *Config {
 	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
 
 	// Log Level switch
-	switch viper.GetString("LogLevel") {
+	switch strings.ToLower(viper.GetString("LogLevel")) {
 	case "debug":
 		configuration.LogLevel = zerolog.DebugLevel
 	case "info":
