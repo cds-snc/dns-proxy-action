@@ -30,7 +30,7 @@ func initConfig() *Config {
 	var configuration Config
 
 	// Set undefined variables
-	viper.SetDefault("Host", "127.0.0.1")
+	viper.SetDefault("Host", "172.17.0.1") // This ensures that docker also binds to the proxy
 	viper.SetDefault("Port", 53)
 	viper.SetDefault("Blocklist", []string{})
 	viper.SetDefault("Safelist", []string{})
