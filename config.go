@@ -76,7 +76,7 @@ func initConfig() *Config {
 	zerolog.SetGlobalLevel(configuration.LogLevel)
 
 	// Create multiple output steams for zerolog
-	multi := zerolog.MultiLevelWriter(QueryLogger{config: &configuration}, SentinelForwarder{config: &configuration}, os.Stdout)
+	multi := zerolog.MultiLevelWriter(QueryLogger{config: &configuration}, SentinelForwarder{config: &configuration}, zerolog.ConsoleWriter{Out: os.Stderr})
 
 	logger := zerolog.New(multi).With().Timestamp().Logger()
 

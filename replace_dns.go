@@ -13,10 +13,8 @@ const (
 )
 
 func replaceDNS(config *Config) {
-
 	// Replace Systemd DNS
 	replaceResolveDNS(config)
-
 }
 
 func replaceResolveDNS(config *Config) {
