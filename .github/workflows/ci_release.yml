@@ -14,4 +14,4 @@ jobs:
         run: make release-test
 
       - name: Diff binaries
-        run: diff -u ./release/latest/dns-proxy-action ./release/latest.dns-proxy-action-test || exit 1
+        run: diff -u ./release/latest/dns-proxy-action ./release/latest/dns-proxy-action-test || exit 1
