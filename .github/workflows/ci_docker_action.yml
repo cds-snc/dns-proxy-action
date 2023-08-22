@@ -12,6 +12,8 @@ jobs:
 
       - name: Run
         uses: ./ # Uses an action in the root directory
+        env:
+          DNS_PROXY_HOST: 172.17.0.1
 
       - name: Report deployment to Sentinel
         uses: cds-snc/sentinel-forward-data-action@main
