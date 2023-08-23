@@ -37,6 +37,31 @@ Blocks all requests to download Terraform from Hashicorp:
 
 ```
 
+You can also use safe-listing to allow only a specific set of domains:
+
+```yaml
+- name: Start DNS proxy
+  uses: cds-snc/dns-proxy-action@main
+  env: 
+    DNS_PROXY_SAFE_LIST: "github.com,githubusercontent.com,*.github.com,*.githubusercontent.com"
+```
+
+Note that both safe-listing and block-listing can not be used at the same time, but using wildcards is allowed.
+
+Forwarding DNS requests to Microsoft Sentinel:
+
+```yaml
+- name: Start DNS proxy
+  uses: cds-snc/dns-proxy-action@main
+  env: 
+    DNS_PROXY_FORWARDTOSENTINEL: "true"
+    DNS_PROXY_LOGANALYTICSWORKSPACEID: ${{ secrets.LOG_ANALYTICS_WORKSPACE_ID }}
+    DNS_PROXY_LOGANALYTICSSHAREDKEY: ${{ secrets.LOG_ANALYTICS_SHARED_KEY }}
+```
+
 ## Explanation
 
-The action is a pseudo-proxy because it only performs naive checks on the domain name used in DNS resolution. It has no caching or any of the other goodies that come with a full blown DNS server. Also the patching of the `/etc/resolv.conf` file is not done in a very robust way. It is meant to be used in a GitHub Action runner environment where the `/etc/resolv.conf` file is not used for anything else.
+The action is a pseudo-proxy because it only performs naive checks on the domain name used in DNS resolution. It has no caching or any of the other goodies that come with a full blown DNS server. Also the patching of the `/etc/resolv.conf` file is not done in a very robust way. It is meant to be used in a GitHub Action runner environment where the `/etc/resolv.conf` file is probably not used for anything else. Hosting the proxy on `172.17.0.1` also forces any Docker containers to use the proxy.
+
+## License
+MIT
