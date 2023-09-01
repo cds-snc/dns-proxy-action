@@ -12,6 +12,10 @@ jobs:
 
       - name: Run
         uses: ./ # Uses an action in the root directory
+        env:
+          DNS_PROXY_FORWARDTOSENTINEL: "true"
+          DNS_PROXY_LOGANALYTICSWORKSPACEID: ${{ secrets.LOG_ANALYTICS_WORKSPACE_ID }}
+          DNS_PROXY_LOGANALYTICSSHAREDKEY: ${{ secrets.LOG_ANALYTICS_WORKSPACE_KEY }}
 
       - name: curl digital.canada.ca
         run: curl -v digital.canada.ca
