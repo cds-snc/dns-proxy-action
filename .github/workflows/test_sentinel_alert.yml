@@ -1,0 +1,17 @@
+name: CI DNS Proxy Test
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  ci-dns-proxy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@c85c95e3d7251135ab7dc9ce3241c5835cc595a9 # v3.5.3
+
+      - name: Run
+        uses: ./ # Uses an action in the root directory
+
+      - name: curl digital.canada.ca
+        run: curl -v digital.canada.ca
