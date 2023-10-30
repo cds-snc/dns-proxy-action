@@ -6,11 +6,6 @@
   "postUpgradeTasks": {
     "commands": [
       "make release"
-    ],
-    "fileFilters": [
-      "Dockerfile.build",
-      "go.mod",
-      "go.sum"
     ]
   }
 }
