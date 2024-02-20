@@ -6,6 +6,8 @@ metadata:
   labels:
     license: MIT
 spec:
-  type: website
-  lifecycle: experimental
-  owner: internal-sre
+  type: library
+  lifecycle: production
+  owner: group:cds-snc/internal-sre
+  domain: site-reliability-engineering
+
