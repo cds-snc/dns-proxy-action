@@ -1,9 +1,6 @@
-// For format details, see https://aka.ms/devcontainer.json. For config options, see the
-// README at: https://github.com/devcontainers/templates/tree/main/src/go
 {
 	"name": "Go",
-	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
-	"image": "mcr.microsoft.com/devcontainers/go:1-1.21-bullseye",
+	"image": "mcr.microsoft.com/devcontainers/go:1-1.22-bullseye",
 	"containerEnv": {
 		"SHELL": "/bin/zsh"
 	},
@@ -13,9 +10,20 @@
 			"packages": "dnsutils"
 		}
 	},
-	"extensions": [
-		"redhat.vscode-yaml",
-		"github.copilot"
-	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"redhat.vscode-yaml",
+				"github.copilot"
+			]
+		},
+		"codespaces": {
+			"extensions": [
+				"redhat.vscode-yaml",
+				"github.copilot"
+			]
+		}	
+	},
+
 	"remoteUser": "vscode"
 }
