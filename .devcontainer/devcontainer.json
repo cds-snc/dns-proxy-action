@@ -5,8 +5,8 @@
 		"SHELL": "/bin/zsh"
 	},
 	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:2@sha256:23ae11a86089da5f0b98a6edd603f91831802b7f2d5ef1e104e1b94a3beb546c": {},
-		"ghcr.io/rocker-org/devcontainer-features/apt-packages:1@sha256:87a4d7750a596a5db034ba8508782f31aebdc2ffe955c66aaecb33d9de2ecdae": {
+		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
 			"packages": "dnsutils"
 		}
 	},
