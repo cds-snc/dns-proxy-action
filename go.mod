@@ -4,7 +4,7 @@ go 1.22.2
 
 require (
 	github.com/google/gopacket v1.1.19
-	github.com/rs/zerolog v1.32.0
+	github.com/rs/zerolog v1.33.0
 	github.com/spf13/viper v1.18.2
 )
 
