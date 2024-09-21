@@ -1,6 +1,6 @@
 {
 	"name": "Go",
-	"image": "mcr.microsoft.com/devcontainers/go:1-1.22-bullseye@sha256:44c273a0506ee6c7c13f4f0c1abe8dd077469ac9f3ae6be0617d6c59a1256089",
+	"image": "mcr.microsoft.com/devcontainers/go:1-1.22-bullseye@sha256:68e6bd322c03117d54ce8f84de518d7ffce72126d869072ae3b5a72ab84267c9",
 	"containerEnv": {
 		"SHELL": "/bin/zsh"
 	},
