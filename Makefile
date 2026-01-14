@@ -1,4 +1,5 @@
-.PHONY: dev release
+.PHONY: dev release release-test
+.DEFAULT_GOAL := release
 
 dev:
 	@echo "Starting dev server..."
