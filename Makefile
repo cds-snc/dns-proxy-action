@@ -1,4 +1,4 @@
-.PHONY: dev release release-test
+.PHONY: dev release release-test test
 .DEFAULT_GOAL := release
 
 dev:
@@ -18,3 +18,9 @@ release-test:
 	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash 
 	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-test
 	@docker rm -f dns-proxy-action-build
+
+test:
+	@echo "Installing dependencies..."
+	@go mod download
+	@echo "Running unit tests..."
+	@go test ./... -v -timeout 60s
