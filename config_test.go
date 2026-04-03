@@ -50,6 +50,9 @@ func TestInitConfig_Defaults(t *testing.T) {
 	if len(config.SafeList) != 0 {
 		t.Errorf("SafeList: expected empty slice, got %v", config.SafeList)
 	}
+	if config.WildcardGreedy {
+		t.Error("WildcardGreedy: expected false by default")
+	}
 }
 
 func TestInitConfig_HostOverride(t *testing.T) {
@@ -158,6 +161,17 @@ func TestInitConfig_LogLevels(t *testing.T) {
 				t.Errorf("LogLevel for %q: expected %v, got %v", tt.envVal, tt.expected, config.LogLevel)
 			}
 		})
+	}
+}
+
+func TestInitConfig_WildcardGreedyOverride(t *testing.T) {
+	resetViper(t)
+	t.Setenv("DNS_PROXY_WILDCARDGREEDY", "true")
+
+	config := initConfig()
+
+	if !config.WildcardGreedy {
+		t.Error("WildcardGreedy: expected true")
 	}
 }
 

@@ -10,8 +10,8 @@ The action is configured through the following environment variables:
 | --- | --- | --- |
 | `DNS_PROXY_HOST` | The host to listen on | `172.17.0.1` |
 | `DNS_PROXY_LISTEN_PORT` | The port to listen on | `53` |
-| `DNS_PROXY_SAFE_LIST` | A comma-separated list of domains to allow | |
-| `DNS_PROXY_BLOCK_LIST` | A comma-separated list of domains to block | |
+| `DNS_PROXY_SAFELIST` | A comma-separated list of domains to allow | |
+| `DNS_PROXY_BLOCKLIST` | A comma-separated list of domains to block | |
 | `DNS_PROXY_UPSTREAM` | The upstream DNS server to forward requests to | `8.8.8.8` |
 | `DNS_PROXY_LOGLEVEL` | The log level to use | `info` |
 | `DNS_PROXY_FORWARDTOSENTINEL` | Whether to forward DNS requests to Microsoft Sentinel | `false` |
@@ -20,6 +20,7 @@ The action is configured through the following environment variables:
 | `DNS_PROXY_LOGANALYTICSTABLE` | The name of the Log Analytics table to forward DNS requests to | `GitHubMetadata_CI_DNS_Queries` |
 | `DNS_PROXY_OVERWRITECONFIG` | Whether to overwrite the DNS configuration on the host | `true` |
 | `DNS_PROXY_QUERYLOGFILEPATH` | The path to the query log file | `/tmp/dns-proxy-query.log` |
+| `DNS_PROXY_WILDCARDGREEDY` | `*` character behaviour for safe and block lists (greedy `*` matches one or more URL segments while non-greedy only matches one segement) | `false` |
 
 ## Example usage
 

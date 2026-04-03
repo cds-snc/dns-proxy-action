@@ -22,6 +22,7 @@ type Config struct {
 	QueryLogFilePath        string
 	SafeList                []string
 	UpstreamServer          string
+	WildcardGreedy          bool
 }
 
 func initConfig() *Config {
@@ -43,6 +44,7 @@ func initConfig() *Config {
 	viper.SetDefault("LogAnalyticsTable", "GitHubMetadata_CI_DNS_Queries")
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
+	viper.SetDefault("WildcardGreedy", false)
 
 	configuration.Host = viper.GetString("Host")
 	configuration.Port = viper.GetInt64("Port")
@@ -55,6 +57,7 @@ func initConfig() *Config {
 	configuration.LogAnalyticsTable = viper.GetString("LogAnalyticsTable")
 	configuration.OverwriteConfig = viper.GetBool("OverwriteConfig")
 	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
+	configuration.WildcardGreedy = viper.GetBool("WildcardGreedy")
 
 	// Log Level switch
 	switch strings.ToLower(viper.GetString("LogLevel")) {

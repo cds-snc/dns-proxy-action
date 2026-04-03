@@ -31,51 +31,122 @@ func newDNSQuery(domain string, qtype layers.DNSType) *layers.DNS {
 // ─── checkWildcard ───────────────────────────────────────────────────────────
 
 func TestCheckWildcard_ExactMatch(t *testing.T) {
-	if !checkWildcard("example.com", "example.com") {
+	if !checkWildcard("example.com", "example.com", false) {
 		t.Error("expected exact match to return true")
 	}
 }
 
 func TestCheckWildcard_WildcardSingleLabel(t *testing.T) {
-	if !checkWildcard("*.example.com", "foo.example.com") {
+	if !checkWildcard("*.example.com", "foo.example.com", false) {
 		t.Error("expected wildcard match to return true")
 	}
 }
 
 func TestCheckWildcard_WildcardDoesNotMatchSubdomain(t *testing.T) {
 	// *.example.com should NOT match foo.bar.example.com (different number of parts)
-	if checkWildcard("*.example.com", "foo.bar.example.com") {
+	if checkWildcard("*.example.com", "foo.bar.example.com", false) {
 		t.Error("expected length mismatch to return false")
 	}
 }
 
 func TestCheckWildcard_WildcardWrongLabel(t *testing.T) {
 	// Wildcard matches any single label, but second part must match
-	if checkWildcard("*.example.com", "foo.other.com") {
+	if checkWildcard("*.example.com", "foo.other.com", false) {
 		t.Error("expected non-matching label to return false")
 	}
 }
 
 func TestCheckWildcard_LengthMismatch_Shorter(t *testing.T) {
-	if checkWildcard("*.example.com", "example.com") {
+	if checkWildcard("*.example.com", "example.com", false) {
 		t.Error("expected shorter domain to return false")
 	}
 }
 
 func TestCheckWildcard_LengthMismatch_Longer(t *testing.T) {
-	if checkWildcard("example.com", "sub.example.com") {
+	if checkWildcard("example.com", "sub.example.com", false) {
 		t.Error("expected longer domain to return false")
 	}
 }
 
 func TestCheckWildcard_MultipleWildcards(t *testing.T) {
-	if !checkWildcard("*.*", "foo.bar") {
+	if !checkWildcard("*.*", "foo.bar", false) {
 		t.Error("expected double wildcard to match foo.bar")
 	}
 }
 
 func TestCheckWildcard_NoMatch(t *testing.T) {
-	if checkWildcard("example.com", "other.com") {
+	if checkWildcard("example.com", "other.com", false) {
+		t.Error("expected non-matching domain to return false")
+	}
+}
+
+// ─── checkWildcard greedy ─────────────────────────────────────────────────────
+
+func TestCheckWildcardGreedy_SingleLabelMatch(t *testing.T) {
+	if !checkWildcard("*.example.com", "bam.example.com", true) {
+		t.Error("expected single-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_MultiLabelMatch(t *testing.T) {
+	if !checkWildcard("*.example.com", "foo.bar.bam.example.com", true) {
+		t.Error("expected multi-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_ZeroLabelMatch(t *testing.T) {
+	// * can match zero labels
+	if !checkWildcard("*.example.com", "example.com", true) {
+		t.Error("expected zero-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_WildcardEndMatch(t *testing.T) {
+	// * can match at the end
+	if !checkWildcard("example.*", "example.foo.ca", true) {
+		t.Error("expected wildcard end match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_WrongSuffix(t *testing.T) {
+	if checkWildcard("*.example.com", "example.com.ca", true) {
+		t.Error("expected wrong suffix to return false")
+	}
+}
+
+func TestCheckWildcardGreedy_ExactMatch(t *testing.T) {
+	if !checkWildcard("example.com", "example.com", true) {
+		t.Error("expected exact match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_MiddleWildcard_SingleLabel(t *testing.T) {
+	if !checkWildcard("foo.*.example.com", "foo.bar.example.com", true) {
+		t.Error("expected middle wildcard single-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_MiddleWildcard_MultiLabel(t *testing.T) {
+	if !checkWildcard("foo.*.example.com", "foo.bar.bam.example.com", true) {
+		t.Error("expected middle wildcard multi-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_MiddleWildcard_ZeroLabel(t *testing.T) {
+	// * can match zero labels in middle position too
+	if !checkWildcard("foo.*.example.com", "foo.example.com", true) {
+		t.Error("expected middle wildcard zero-label match to return true")
+	}
+}
+
+func TestCheckWildcardGreedy_MiddleWildcard_WrongPrefix(t *testing.T) {
+	if checkWildcard("foo.*.example.com", "bar.baz.example.com", true) {
+		t.Error("expected wrong prefix to return false")
+	}
+}
+
+func TestCheckWildcardGreedy_WrongDomain(t *testing.T) {
+	if checkWildcard("*.example.com", "foo.other.com", true) {
 		t.Error("expected non-matching domain to return false")
 	}
 }
@@ -225,8 +296,8 @@ func TestFilterDns_Blocklist_SafelistTakesPrecedence(t *testing.T) {
 // helper to build a minimal DNS query with ID
 func makeDNSQueryWithID(id uint16, domain string, qtype layers.DNSType) *layers.DNS {
 	return &layers.DNS{
-		ID: id,
-		QR: false,
+		ID:        id,
+		QR:        false,
 		Questions: []layers.DNSQuestion{{Name: []byte(domain), Type: qtype}},
 	}
 }
