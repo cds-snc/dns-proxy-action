@@ -15,7 +15,7 @@ jobs:
         include:
           - test: default
           - test: safelist
-            safelist: "*.hashicorp.com"
+            safelist: "*.githubapp.com,*.githubusercontent.com,*.hashicorp.com"
             wildcardgreedy: "true"
           - test: blocklist
             blocklist: "*.hashicorp.com"
