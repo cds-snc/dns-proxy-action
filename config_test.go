@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -172,6 +173,56 @@ func TestInitConfig_WildcardGreedyOverride(t *testing.T) {
 
 	if !config.WildcardGreedy {
 		t.Error("WildcardGreedy: expected true")
+	}
+}
+
+func TestInitConfig_SafelistOverride(t *testing.T) {
+	resetViper(t)
+	t.Setenv("DNS_PROXY_SAFELIST", "*.githubapp.com,*.githubusercontent.com,*.hashicorp.com")
+
+	config := initConfig()
+
+	if len(config.SafeList) != 3 {
+		t.Errorf("SafeList: expected 3 entries, got %d", len(config.SafeList))
+	}
+}
+
+func TestInitConfig_BlocklistOverride(t *testing.T) {
+	resetViper(t)
+	t.Setenv("DNS_PROXY_BLOCKLIST", "*.githubapp.com,*.githubusercontent.com")
+
+	config := initConfig()
+
+	if len(config.BlockList) != 2 {
+		t.Errorf("BlockList: expected 2 entries, got %d", len(config.BlockList))
+	}
+}
+
+func TestParseSlice(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want []string
+	}{
+		{"comma", "a,b,c", []string{"a", "b", "c"}},
+		{"comma_spaces", " a, b ,c ", []string{"a", "b", "c"}},
+		{"newline_lf", "a\nb\nc", []string{"a", "b", "c"}},
+		{"newline_crlf", "a\r\nb\r\nc", []string{"a", "b", "c"}},
+		{"mixed_comma_newline", "a,b\nc", []string{"a", "b", "c"}},
+		{"single", "single", []string{"single"}},
+		{"empty", "", []string{}},
+		{"spaces_only", "   ", []string{}},
+		{"leading_trailing_commas", ",a,b,", []string{"a", "b"}},
+		{"empty_lines", "\n\na\n\n", []string{"a"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseSlice(tt.in)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("parseSlice(%q) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
 	}
 }
 
