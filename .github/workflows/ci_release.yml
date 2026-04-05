@@ -8,25 +8,28 @@ permissions:
   contents: read
 
 jobs:
-  ci-latest-release-amd64:
-    runs-on: ubuntu-latest
+  ci-latest-release:
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Build a new release based on the code
-        run: make release-test PLATFORM=amd64
-
-      - name: Diff binaries
-        run: diff -u ./release/latest/dns-proxy-action-amd64 ./release/latest/dns-proxy-action-amd64-test || exit 1
-
-  ci-latest-release-arm64:
-    runs-on: ubuntu-24.04-arm
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Determine platform
+        run: |
+          if [[ "${{ matrix.runner }}" == *"arm"* ]]; then
+            echo "PLATFORM=arm64" >> $GITHUB_ENV
+          else
+            echo "PLATFORM=amd64" >> $GITHUB_ENV
+          fi
 
       - name: Build a new release based on the code
-        run: make release-test PLATFORM=arm64
+        run: make release-test PLATFORM=${PLATFORM}
 
       - name: Diff binaries
-        run: diff -u ./release/latest/dns-proxy-action-arm64 ./release/latest/dns-proxy-action-arm64-test || exit 1
+        run: diff -u ./release/latest/dns-proxy-action-${PLATFORM} ./release/latest/dns-proxy-action-${PLATFORM}-test || exit 1
+
 
