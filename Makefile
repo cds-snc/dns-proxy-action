@@ -1,5 +1,7 @@
-.PHONY: dev release release-test test
+.PHONY: dev release release-all release-test test
 .DEFAULT_GOAL := release
+
+PLATFORM ?= amd64
 
 dev:
 	@echo "Starting dev server..."
@@ -7,24 +9,20 @@ dev:
 
 release:
 	@mkdir -p release/latest
-	@docker build --platform linux/amd64 -t dns-proxy-action-build -f Dockerfile.build .
+	@docker build --platform linux/$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
 	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
-	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-amd64
+	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-$(PLATFORM)
 	@docker rm -f dns-proxy-action-build
-	@docker build --platform linux/arm64 -t dns-proxy-action-build -f Dockerfile.build .
-	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
-	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-arm64
-	@docker rm -f dns-proxy-action-build
+
+release-all:
+	@$(MAKE) release PLATFORM=amd64
+	@$(MAKE) release PLATFORM=arm64
 
 release-test:
 	@mkdir -p release/latest
-	@docker build --platform linux/amd64 -t dns-proxy-action-build -f Dockerfile.build .
+	@docker build --platform linux/$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
 	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
-	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-amd64-test
-	@docker rm -f dns-proxy-action-build
-	@docker build --platform linux/arm64 -t dns-proxy-action-build -f Dockerfile.build .
-	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
-	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-arm64-test
+	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-$(PLATFORM)-test
 	@docker rm -f dns-proxy-action-build
 
 test:
