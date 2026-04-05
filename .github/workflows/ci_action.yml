@@ -8,8 +8,49 @@ permissions:
   contents: read
 
 jobs:
-  ci-dns-proxy:
+  ci-dns-proxy-amd64:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - test: default
+            allow_error: false
+          - test: safelist
+            allow_error: false
+            safelist: "*.githubapp.com,*.githubusercontent.com,*.hashicorp.com"
+            wildcardgreedy: "true"
+          - test: blocklist
+            allow_error: true
+            blocklist: "*.hashicorp.com"
+            wildcardgreedy: "true"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Test ${{ matrix.test }}
+        uses: ./
+        env:
+          DNS_PROXY_SAFELIST: ${{ matrix.safelist || '' }}
+          DNS_PROXY_BLOCKLIST: ${{ matrix.blocklist || '' }}
+          DNS_PROXY_WILDCARDGREEDY: ${{ matrix.wildcardgreedy || 'false' }}
+
+      - name: Run a composite action
+        uses: cds-snc/terraform-tools-setup@36df0d7572a15921998170395475093c183d720a # v1.3.0
+        continue-on-error: ${{ matrix.allow_error }}
+        env:
+          CONFTEST_VERSION: NONE
+          TERRAFORM_VERSION: 1.14.0
+          TERRAGRUNT_VERSION: NONE
+          TF_SUMMARIZE_VERSION: NONE
+          TRUFFLEHOG_VERSION: NONE
+
+      - name: cat DNS
+        run: cat /tmp/dns-proxy-action.out
+
+      - name: cat output file
+        run: cat /tmp/dns_query.log
+
+  ci-dns-proxy-arm64:
+    runs-on: ubuntu-24.04-arm
     strategy:
       matrix:
         include:
