@@ -5,7 +5,7 @@ func main() {
 	config := initConfig()
 
 	// Print config
-	config.Logger.Debug().
+	config.Logger.Info().
 		Str("host", config.Host).
 		Int64("port", config.Port).
 		Strs("blocklist", config.BlockList).
@@ -14,6 +14,7 @@ func main() {
 		Bool("forward_to_sentinel", config.ForwardToSentinel).
 		Bool("overwrite_config", config.OverwriteConfig).
 		Str("query_log_file_path", config.QueryLogFilePath).
+		Bool("wildcardgreedy", config.WildcardGreedy).
 		Msg("Configuration")
 
 	// Install the proxy server as the default DNS resolver

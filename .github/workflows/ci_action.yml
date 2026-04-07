@@ -4,19 +4,42 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   ci-dns-proxy:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        runner: 
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+        test: 
+          - default
+          - safelist
+          - blocklist
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - name: Run
-        uses: ./ # Uses an action in the root directory
+      - name: Test ${{ matrix.test }}
+        uses: ./
+        env:
+          DNS_PROXY_SAFELIST: ${{ matrix.test == 'safelist' && '*.githubapp.com,*.githubusercontent.com,*.hashicorp.com' || '' }}
+          DNS_PROXY_BLOCKLIST: ${{ matrix.test == 'blocklist' && '*.hashicorp.com' || '' }}
+          DNS_PROXY_WILDCARDGREEDY: ${{ matrix.test != 'default' }}
 
       - name: Run a composite action
-        uses: cds-snc/terraform-tools-setup@5a19984bcb888600ad646e0caf5c6f4d0a54c165 # v1.2.0
+        uses: cds-snc/terraform-tools-setup@36df0d7572a15921998170395475093c183d720a # v1.3.0
+        continue-on-error: ${{ matrix.test == 'blocklist' }}
+        env:
+          CONFTEST_VERSION: NONE
+          TERRAFORM_VERSION: 1.14.0
+          TERRAGRUNT_VERSION: NONE
+          TF_SUMMARIZE_VERSION: NONE
+          TRUFFLEHOG_VERSION: NONE
 
-      - name: Cat DNS
+      - name: cat DNS
         run: cat /tmp/dns-proxy-action.out
 
       - name: cat output file

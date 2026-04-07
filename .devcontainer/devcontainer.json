@@ -1,11 +1,14 @@
 {
 	"name": "Go",
-	"image": "mcr.microsoft.com/devcontainers/go:1-1.22-bullseye@sha256:f2d2a2bf200bb2de430a9eb4115fa87ae5d665a39539a2d5dee868227f786531",
+	"image": "mcr.microsoft.com/devcontainers/base:bullseye@sha256:c4a714ff46f28f8502a69d18756b5d9d7e49c2cc3e5ca166b5f74ff80d1792d0",
 	"containerEnv": {
 		"SHELL": "/bin/zsh"
 	},
 	"features": {
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {},
+		"ghcr.io/devcontainers/features/go:1": {
+			"version": "1.25.6"
+		},
 		"ghcr.io/rocker-org/devcontainer-features/apt-packages:1": {
 			"packages": "dnsutils"
 		}

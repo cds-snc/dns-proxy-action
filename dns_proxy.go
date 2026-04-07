@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,21 +11,28 @@ import (
 	layers "github.com/google/gopacket/layers"
 )
 
-func checkWildcard(wildcard string, domain string) bool {
-	wildcardParts := strings.Split(wildcard, ".")
-	domainParts := strings.Split(domain, ".")
-
-	if len(wildcardParts) != len(domainParts) {
-		return false
-	}
-
-	for i, part := range wildcardParts {
-		if part != "*" && part != domainParts[i] {
+func checkWildcard(wildcard string, domain string, greedy bool) bool {
+	// Non-greedy matching: * matches one domain segment only, and the
+	// number of segments must match
+	if !greedy {
+		wildcardParts := strings.Split(wildcard, ".")
+		domainParts := strings.Split(domain, ".")
+		if len(wildcardParts) != len(domainParts) {
 			return false
 		}
+		for i, part := range wildcardParts {
+			if part != "*" && part != domainParts[i] {
+				return false
+			}
+		}
+		return true
 	}
 
-	return true
+	// Greedy matching: * can match zero or more domain segments
+	escaped := regexp.QuoteMeta(wildcard)
+	regexStr := strings.ReplaceAll(escaped, `\*\.`, `([^.]+\.)*`)
+	regexStr = strings.ReplaceAll(regexStr, `\*`, `.*`)
+	return regexp.MustCompile("^" + regexStr + "$").MatchString(domain)
 }
 
 func dnsProxyServer(config *Config) {
@@ -84,7 +92,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 	// Check if we are using a safelist or a blocklist
 	if len(config.SafeList) > 0 {
 		for _, safeDomain := range config.SafeList {
-			if checkWildcard(safeDomain, domain) {
+			if checkWildcard(safeDomain, domain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "passed").
@@ -99,7 +107,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 		return true
 	} else {
 		for _, blockedDomain := range config.BlockList {
-			if checkWildcard(blockedDomain, domain) {
+			if checkWildcard(blockedDomain, domain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "blocked").

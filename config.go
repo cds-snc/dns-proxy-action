@@ -22,6 +22,7 @@ type Config struct {
 	QueryLogFilePath        string
 	SafeList                []string
 	UpstreamServer          string
+	WildcardGreedy          bool
 }
 
 func initConfig() *Config {
@@ -43,11 +44,12 @@ func initConfig() *Config {
 	viper.SetDefault("LogAnalyticsTable", "GitHubMetadata_CI_DNS_Queries")
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
+	viper.SetDefault("WildcardGreedy", false)
 
 	configuration.Host = viper.GetString("Host")
 	configuration.Port = viper.GetInt64("Port")
-	configuration.BlockList = viper.GetStringSlice("Blocklist")
-	configuration.SafeList = viper.GetStringSlice("Safelist")
+	configuration.BlockList = parseSlice(viper.GetString("Blocklist"))
+	configuration.SafeList = parseSlice(viper.GetString("Safelist"))
 	configuration.UpstreamServer = viper.GetString("UpstreamServer")
 	configuration.ForwardToSentinel = viper.GetBool("ForwardToSentinel")
 	configuration.LogAnalyticsWorkspaceId = viper.GetString("LogAnalyticsWorkspaceId")
@@ -55,6 +57,7 @@ func initConfig() *Config {
 	configuration.LogAnalyticsTable = viper.GetString("LogAnalyticsTable")
 	configuration.OverwriteConfig = viper.GetBool("OverwriteConfig")
 	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
+	configuration.WildcardGreedy = viper.GetBool("WildcardGreedy")
 
 	// Log Level switch
 	switch strings.ToLower(viper.GetString("LogLevel")) {
@@ -85,4 +88,20 @@ func initConfig() *Config {
 
 	return &configuration
 
+}
+
+func parseSlice(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return []string{}
+	}
+	// Split on comma and newline (handle CRLF) and trim each entry. Ignore empty lines.
+	var parts []string
+	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' }) {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
 }
