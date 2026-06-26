@@ -39,11 +39,8 @@ func TestInitConfig_Defaults(t *testing.T) {
 	if config.QueryLogFilePath != "/tmp/dns_query.log" {
 		t.Errorf("QueryLogFilePath: expected /tmp/dns_query.log, got %q", config.QueryLogFilePath)
 	}
-	if config.SentinelStreamName != "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL" {
-		t.Errorf("SentinelStreamName: expected Custom-GitHubMetadata_CI_DNS_Queries_V2_CL, got %q", config.SentinelStreamName)
-	}
-	if config.SentinelOIDCAudience != "api://AzureADTokenExchange" {
-		t.Errorf("SentinelOIDCAudience: expected api://AzureADTokenExchange, got %q", config.SentinelOIDCAudience)
+	if config.LogAnalyticsTable != "GitHubMetadata_CI_DNS_Queries" {
+		t.Errorf("LogAnalyticsTable: expected GitHubMetadata_CI_DNS_Queries, got %q", config.LogAnalyticsTable)
 	}
 	if config.LogLevel != zerolog.InfoLevel {
 		t.Errorf("LogLevel: expected InfoLevel, got %v", config.LogLevel)
@@ -95,35 +92,23 @@ func TestInitConfig_UpstreamServerOverride(t *testing.T) {
 func TestInitConfig_ForwardToSentinelOverride(t *testing.T) {
 	resetViper(t)
 	t.Setenv("DNS_PROXY_FORWARDTOSENTINEL", "true")
-	t.Setenv("DNS_PROXY_SENTINELTENANTID", "tenant-id")
-	t.Setenv("DNS_PROXY_SENTINELCLIENTID", "client-id")
-	t.Setenv("DNS_PROXY_SENTINELDCEURI", "https://example.ingest.monitor.azure.com")
-	t.Setenv("DNS_PROXY_SENTINELDCRIMMUTABLEID", "dcr-immutable-id")
-	t.Setenv("DNS_PROXY_SENTINELSTREAMNAME", "Custom-MyTable_CL")
-	t.Setenv("DNS_PROXY_SENTINELOIDCAUDIENCE", "api://AzureADTokenExchange")
+	t.Setenv("DNS_PROXY_LOGANALYTICSWORKSPACEID", "ws-id")
+	t.Setenv("DNS_PROXY_LOGANALYTICSSHAREDKEY", "c2VjcmV0")
+	t.Setenv("DNS_PROXY_LOGANALYTICSTABLE", "MyTable")
 
 	config := initConfig()
 
 	if !config.ForwardToSentinel {
 		t.Error("ForwardToSentinel: expected true")
 	}
-	if config.SentinelTenantID != "tenant-id" {
-		t.Errorf("SentinelTenantID: expected tenant-id, got %q", config.SentinelTenantID)
+	if config.LogAnalyticsWorkspaceId != "ws-id" {
+		t.Errorf("LogAnalyticsWorkspaceId: expected ws-id, got %q", config.LogAnalyticsWorkspaceId)
 	}
-	if config.SentinelClientID != "client-id" {
-		t.Errorf("SentinelClientID: expected client-id, got %q", config.SentinelClientID)
+	if config.LogAnalyticsSharedKey != "c2VjcmV0" {
+		t.Errorf("LogAnalyticsSharedKey: expected c2VjcmV0, got %q", config.LogAnalyticsSharedKey)
 	}
-	if config.SentinelDCEURI != "https://example.ingest.monitor.azure.com" {
-		t.Errorf("SentinelDCEURI: expected https://example.ingest.monitor.azure.com, got %q", config.SentinelDCEURI)
-	}
-	if config.SentinelDCRImmutableID != "dcr-immutable-id" {
-		t.Errorf("SentinelDCRImmutableID: expected dcr-immutable-id, got %q", config.SentinelDCRImmutableID)
-	}
-	if config.SentinelStreamName != "Custom-MyTable_CL" {
-		t.Errorf("SentinelStreamName: expected Custom-MyTable_CL, got %q", config.SentinelStreamName)
-	}
-	if config.SentinelOIDCAudience != "api://AzureADTokenExchange" {
-		t.Errorf("SentinelOIDCAudience: expected api://AzureADTokenExchange, got %q", config.SentinelOIDCAudience)
+	if config.LogAnalyticsTable != "MyTable" {
+		t.Errorf("LogAnalyticsTable: expected MyTable, got %q", config.LogAnalyticsTable)
 	}
 }
 
