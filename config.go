@@ -9,23 +9,20 @@ import (
 )
 
 type Config struct {
-	BlockList              []string
-	ForwardToSentinel      bool
-	Host                   string
-	LogLevel               zerolog.Level
-	Logger                 zerolog.Logger
-	OverwriteConfig        bool
-	Port                   int64
-	QueryLogFilePath       string
-	SafeList               []string
-	SentinelClientID       string
-	SentinelDCEURI         string
-	SentinelDCRImmutableID string
-	SentinelOIDCAudience   string
-	SentinelStreamName     string
-	SentinelTenantID       string
-	UpstreamServer         string
-	WildcardGreedy         bool
+	BlockList               []string
+	ForwardToSentinel       bool
+	Host                    string
+	LogAnalyticsWorkspaceId string
+	LogAnalyticsSharedKey   string
+	LogAnalyticsTable       string
+	LogLevel                zerolog.Level
+	Logger                  zerolog.Logger
+	OverwriteConfig         bool
+	Port                    int64
+	QueryLogFilePath        string
+	SafeList                []string
+	UpstreamServer          string
+	WildcardGreedy          bool
 }
 
 func initConfig() *Config {
@@ -42,12 +39,9 @@ func initConfig() *Config {
 	viper.SetDefault("UpstreamServer", "8.8.8.8")
 	viper.SetDefault("LogLevel", "info")
 	viper.SetDefault("ForwardToSentinel", false)
-	viper.SetDefault("SentinelTenantID", "")
-	viper.SetDefault("SentinelClientID", "")
-	viper.SetDefault("SentinelOIDCAudience", "api://AzureADTokenExchange")
-	viper.SetDefault("SentinelDCEURI", "")
-	viper.SetDefault("SentinelDCRImmutableID", "")
-	viper.SetDefault("SentinelStreamName", "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL")
+	viper.SetDefault("LogAnalyticsWorkspaceId", "")
+	viper.SetDefault("LogAnalyticsSharedKey", "")
+	viper.SetDefault("LogAnalyticsTable", "GitHubMetadata_CI_DNS_Queries")
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
 	viper.SetDefault("WildcardGreedy", false)
@@ -58,12 +52,9 @@ func initConfig() *Config {
 	configuration.SafeList = parseSlice(viper.GetString("Safelist"))
 	configuration.UpstreamServer = viper.GetString("UpstreamServer")
 	configuration.ForwardToSentinel = viper.GetBool("ForwardToSentinel")
-	configuration.SentinelTenantID = viper.GetString("SentinelTenantID")
-	configuration.SentinelClientID = viper.GetString("SentinelClientID")
-	configuration.SentinelOIDCAudience = viper.GetString("SentinelOIDCAudience")
-	configuration.SentinelDCEURI = viper.GetString("SentinelDCEURI")
-	configuration.SentinelDCRImmutableID = viper.GetString("SentinelDCRImmutableID")
-	configuration.SentinelStreamName = viper.GetString("SentinelStreamName")
+	configuration.LogAnalyticsWorkspaceId = viper.GetString("LogAnalyticsWorkspaceId")
+	configuration.LogAnalyticsSharedKey = viper.GetString("LogAnalyticsSharedKey")
+	configuration.LogAnalyticsTable = viper.GetString("LogAnalyticsTable")
 	configuration.OverwriteConfig = viper.GetBool("OverwriteConfig")
 	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
 	configuration.WildcardGreedy = viper.GetBool("WildcardGreedy")
