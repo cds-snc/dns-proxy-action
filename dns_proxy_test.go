@@ -258,27 +258,27 @@ func TestFilterDns_Safelist_WildcardBlocked(t *testing.T) {
 	}
 }
 
-func TestFilterDns_SentinelDomain_Excluded(t *testing.T) {
+func TestFilterDns_SentinelDCEHost_Excluded(t *testing.T) {
 	cfg := newDiscardLogger()
 	cfg.ForwardToSentinel = true
-	cfg.LogAnalyticsWorkspaceId = "myworkspace"
+	cfg.SentinelDCEURI = "https://example-dce.eastus-1.ingest.monitor.azure.com"
 	// SafeList intentionally empty — domain still should not be filtered
 	cfg.SafeList = []string{"other.com"}
-	req := newDNSQuery("myworkspace.ods.opinsights.azure.com", layers.DNSTypeA)
+	req := newDNSQuery("example-dce.eastus-1.ingest.monitor.azure.com", layers.DNSTypeA)
 	if filterDns(req, cfg) {
-		t.Error("sentinel workspace domain should never be filtered")
+		t.Error("sentinel DCE host should never be filtered")
 	}
 }
 
-func TestFilterDns_SentinelDisabled_WorkspaceDomainFiltered(t *testing.T) {
+func TestFilterDns_SentinelDisabled_DCEHostFiltered(t *testing.T) {
 	cfg := newDiscardLogger()
 	cfg.ForwardToSentinel = false
-	cfg.LogAnalyticsWorkspaceId = "myworkspace"
+	cfg.SentinelDCEURI = "https://example-dce.eastus-1.ingest.monitor.azure.com"
 	cfg.SafeList = []string{"other.com"}
-	req := newDNSQuery("myworkspace.ods.opinsights.azure.com", layers.DNSTypeA)
+	req := newDNSQuery("example-dce.eastus-1.ingest.monitor.azure.com", layers.DNSTypeA)
 	// ForwardToSentinel is false, domain is not on safelist → should be filtered
 	if !filterDns(req, cfg) {
-		t.Error("workspace domain should be filtered when ForwardToSentinel is false and not on safelist")
+		t.Error("DCE host should be filtered when ForwardToSentinel is false and not on safelist")
 	}
 }
 
