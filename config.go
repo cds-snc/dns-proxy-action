@@ -47,7 +47,7 @@ func initConfig() *Config {
 	viper.SetDefault("SentinelOIDCAudience", "api://AzureADTokenExchange")
 	viper.SetDefault("SentinelDCEURI", "")
 	viper.SetDefault("SentinelDCRImmutableID", "")
-	viper.SetDefault("SentinelStreamName", "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL")
+	viper.SetDefault("SentinelStreamName", "Custom-GitHubMetadata_CI_DNS_Queries_V2_Input")
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
 	viper.SetDefault("WildcardGreedy", false)
