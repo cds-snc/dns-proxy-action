@@ -16,6 +16,52 @@ type SentinelForwarder struct {
 	config *Config
 }
 
+func normalizeDomainName(domain string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(domain)), ".")
+}
+
+func extractDomainFromLogEvent(p []byte) (string, bool) {
+	var evt map[string]any
+	if err := json.Unmarshal(p, &evt); err != nil {
+		return "", false
+	}
+
+	raw, ok := evt["domain"]
+	if !ok {
+		return "", false
+	}
+
+	domain, ok := raw.(string)
+	if !ok {
+		return "", false
+	}
+
+	return normalizeDomainName(domain), domain != ""
+}
+
+func shouldSkipSentinelForwarding(domain string, config *Config) bool {
+	domain = normalizeDomainName(domain)
+	if domain == "" {
+		return false
+	}
+
+	// Avoid recursive DNS dependencies when obtaining OIDC and Azure tokens.
+	if domain == "token.actions.githubusercontent.com" || domain == "login.microsoftonline.com" {
+		return true
+	}
+	if strings.HasSuffix(domain, ".actions.githubusercontent.com") {
+		return true
+	}
+
+	// DCE host should never re-enter forwarding path.
+	dceHost := sentinelIngestionHost(config.SentinelDCEURI)
+	if dceHost != "" && domain == dceHost {
+		return true
+	}
+
+	return false
+}
+
 func buildSentinelPayload(p []byte) ([]byte, error) {
 	var evt map[string]any
 	if err := json.Unmarshal(p, &evt); err != nil {
@@ -133,6 +179,10 @@ func buildIngestionURI(config *Config) string {
 
 func (w SentinelForwarder) Write(p []byte) (n int, err error) {
 	if w.config.ForwardToSentinel && bytes.Contains(p, []byte("\"domain\":")) {
+		if domain, ok := extractDomainFromLogEvent(p); ok && shouldSkipSentinelForwarding(domain, w.config) {
+			return len(p), nil
+		}
+
 		if w.config.SentinelTenantID == "" || w.config.SentinelClientID == "" || w.config.SentinelDCEURI == "" || w.config.SentinelDCRImmutableID == "" || w.config.SentinelStreamName == "" {
 			fmt.Println("Sentinel forwarding is enabled, but required OIDC/DCR settings are missing")
 			return len(p), nil
