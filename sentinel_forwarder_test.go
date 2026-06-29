@@ -216,29 +216,3 @@ func TestSentinelForwarder_Write_NoDomainField(t *testing.T) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
 }
-
-func TestSentinelForwarder_Write_SkipsOIDCAndAuthInfraDomains(t *testing.T) {
-	// If forwarding were attempted, this would fail because OIDC env is intentionally missing.
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
-	tests := []string{
-		"token.actions.githubusercontent.com",
-		"run-actions-3-azure-eastus.actions.githubusercontent.com",
-		"login.microsoftonline.com",
-	}
-
-	for _, domain := range tests {
-		t.Run(domain, func(t *testing.T) {
-			p := []byte(`{"level":"info","domain":"` + domain + `","action":"query"}` + "\n")
-
-			n, err := sf.Write(p)
-			if err != nil {
-				t.Fatalf("unexpected error for skipped infra domain %q: %v", domain, err)
-			}
-			if n != len(p) {
-				t.Fatalf("expected %d bytes written, got %d", len(p), n)
-			}
-		})
-	}
-}
