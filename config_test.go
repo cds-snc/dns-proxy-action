@@ -39,6 +39,12 @@ func TestInitConfig_Defaults(t *testing.T) {
 	if config.QueryLogFilePath != "/tmp/dns_query.log" {
 		t.Errorf("QueryLogFilePath: expected /tmp/dns_query.log, got %q", config.QueryLogFilePath)
 	}
+	if config.SentinelForwardingMode != SentinelForwardingModeAuto {
+		t.Errorf("SentinelForwardingMode: expected auto, got %q", config.SentinelForwardingMode)
+	}
+	if config.LogAnalyticsTable != "GitHubMetadata_CI_DNS_Queries" {
+		t.Errorf("LogAnalyticsTable: expected GitHubMetadata_CI_DNS_Queries, got %q", config.LogAnalyticsTable)
+	}
 	if config.SentinelStreamName != "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL" {
 		t.Errorf("SentinelStreamName: expected Custom-GitHubMetadata_CI_DNS_Queries_V2_CL, got %q", config.SentinelStreamName)
 	}
@@ -95,6 +101,7 @@ func TestInitConfig_UpstreamServerOverride(t *testing.T) {
 func TestInitConfig_ForwardToSentinelOverride(t *testing.T) {
 	resetViper(t)
 	t.Setenv("DNS_PROXY_FORWARDTOSENTINEL", "true")
+	t.Setenv("DNS_PROXY_SENTINELFORWARDINGMODE", "oidc")
 	t.Setenv("DNS_PROXY_SENTINELTENANTID", "tenant-id")
 	t.Setenv("DNS_PROXY_SENTINELCLIENTID", "client-id")
 	t.Setenv("DNS_PROXY_SENTINELDCEURI", "https://example.ingest.monitor.azure.com")
@@ -106,6 +113,9 @@ func TestInitConfig_ForwardToSentinelOverride(t *testing.T) {
 
 	if !config.ForwardToSentinel {
 		t.Error("ForwardToSentinel: expected true")
+	}
+	if config.SentinelForwardingMode != SentinelForwardingModeOIDC {
+		t.Errorf("SentinelForwardingMode: expected oidc, got %q", config.SentinelForwardingMode)
 	}
 	if config.SentinelTenantID != "tenant-id" {
 		t.Errorf("SentinelTenantID: expected tenant-id, got %q", config.SentinelTenantID)
@@ -124,6 +134,42 @@ func TestInitConfig_ForwardToSentinelOverride(t *testing.T) {
 	}
 	if config.SentinelOIDCAudience != "api://AzureADTokenExchange" {
 		t.Errorf("SentinelOIDCAudience: expected api://AzureADTokenExchange, got %q", config.SentinelOIDCAudience)
+	}
+}
+
+func TestInitConfig_LegacyForwardingOverride(t *testing.T) {
+	resetViper(t)
+	t.Setenv("DNS_PROXY_FORWARDTOSENTINEL", "true")
+	t.Setenv("DNS_PROXY_SENTINELFORWARDINGMODE", "legacy")
+	t.Setenv("DNS_PROXY_LOGANALYTICSWORKSPACEID", "workspace-id")
+	t.Setenv("DNS_PROXY_LOGANALYTICSSHAREDKEY", "c2VjcmV0")
+	t.Setenv("DNS_PROXY_LOGANALYTICSTABLE", "LegacyTable")
+
+	config := initConfig()
+
+	if config.SentinelForwardingMode != SentinelForwardingModeLegacy {
+		t.Errorf("SentinelForwardingMode: expected legacy, got %q", config.SentinelForwardingMode)
+	}
+	if config.LogAnalyticsWorkspaceId != "workspace-id" {
+		t.Errorf("LogAnalyticsWorkspaceId: expected workspace-id, got %q", config.LogAnalyticsWorkspaceId)
+	}
+	if config.LogAnalyticsSharedKey != "c2VjcmV0" {
+		t.Errorf("LogAnalyticsSharedKey: expected c2VjcmV0, got %q", config.LogAnalyticsSharedKey)
+	}
+	if config.LogAnalyticsTable != "LegacyTable" {
+		t.Errorf("LogAnalyticsTable: expected LegacyTable, got %q", config.LogAnalyticsTable)
+	}
+}
+
+func TestUseLegacySentinelForwarding_AutoDetectsLegacy(t *testing.T) {
+	config := &Config{
+		SentinelForwardingMode:  SentinelForwardingModeAuto,
+		LogAnalyticsWorkspaceId: "workspace-id",
+		LogAnalyticsSharedKey:   "c2VjcmV0",
+	}
+
+	if !useLegacySentinelForwarding(config) {
+		t.Fatal("expected auto mode to use legacy forwarding when legacy credentials exist")
 	}
 }
 

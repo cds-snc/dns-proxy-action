@@ -15,6 +15,10 @@ The action is configured through the following environment variables:
 | `DNS_PROXY_UPSTREAMSERVER` | The upstream DNS server to forward requests to | `8.8.8.8` |
 | `DNS_PROXY_LOGLEVEL` | The log level to use | `info` |
 | `DNS_PROXY_FORWARDTOSENTINEL` | Whether to forward DNS requests to Microsoft Sentinel | `false` |
+| `DNS_PROXY_SENTINELFORWARDINGMODE` | Forwarding mode: `auto`, `legacy`, or `oidc` | `auto` |
+| `DNS_PROXY_LOGANALYTICSWORKSPACEID` | Legacy Log Analytics workspace ID (required in `legacy` mode) | |
+| `DNS_PROXY_LOGANALYTICSSHAREDKEY` | Legacy Log Analytics shared key (required in `legacy` mode) | |
+| `DNS_PROXY_LOGANALYTICSTABLE` | Legacy Log Analytics table name (required in `legacy` mode) | `GitHubMetadata_CI_DNS_Queries` |
 | `DNS_PROXY_SENTINELTENANTID` | Azure tenant ID used to request access tokens | |
 | `DNS_PROXY_SENTINELCLIENTID` | Azure app registration client ID with federated credential for GitHub OIDC | |
 | `DNS_PROXY_SENTINELOIDCAUDIENCE` | Audience used when requesting GitHub OIDC token | `api://AzureADTokenExchange` |
@@ -52,6 +56,19 @@ You can also use safe-listing to allow only a specific set of domains:
 
 Note that both safe-listing and block-listing can not be used at the same time, but using wildcards is allowed.
 
+Forwarding DNS requests to Microsoft Sentinel using legacy Log Analytics shared key authentication:
+
+```yaml
+- name: Start DNS proxy
+  uses: cds-snc/dns-proxy-action@main
+  env:
+    DNS_PROXY_FORWARDTOSENTINEL: "true"
+    DNS_PROXY_SENTINELFORWARDINGMODE: legacy
+    DNS_PROXY_LOGANALYTICSWORKSPACEID: ${{ secrets.LOG_ANALYTICS_WORKSPACE_ID }}
+    DNS_PROXY_LOGANALYTICSSHAREDKEY: ${{ secrets.LOG_ANALYTICS_SHARED_KEY }}
+    DNS_PROXY_LOGANALYTICSTABLE: GitHubMetadata_CI_DNS_Queries
+```
+
 Forwarding DNS requests to Microsoft Sentinel using OIDC and an existing DCR/DCE:
 
 ```yaml
@@ -59,6 +76,7 @@ Forwarding DNS requests to Microsoft Sentinel using OIDC and an existing DCR/DCE
   uses: cds-snc/dns-proxy-action@main
   env: 
     DNS_PROXY_FORWARDTOSENTINEL: "true"
+    DNS_PROXY_SENTINELFORWARDINGMODE: oidc
     DNS_PROXY_SENTINELTENANTID: ${{ vars.AZURE_TENANT_ID }}
     DNS_PROXY_SENTINELCLIENTID: ${{ vars.AZURE_CLIENT_ID }}
     DNS_PROXY_SENTINELDCEURI: ${{ vars.SENTINEL_DCE_URI }}
@@ -68,10 +86,18 @@ Forwarding DNS requests to Microsoft Sentinel using OIDC and an existing DCR/DCE
 
 Make sure the workflow grants `id-token: write` permission so the action can request a GitHub OIDC token.
 
+Mode behavior:
+
+- `DNS_PROXY_SENTINELFORWARDINGMODE=legacy`: always uses Log Analytics shared-key forwarding.
+- `DNS_PROXY_SENTINELFORWARDINGMODE=oidc`: always uses OIDC and DCR/DCE forwarding.
+- `DNS_PROXY_SENTINELFORWARDINGMODE=auto` (default): uses legacy mode when legacy workspace ID and shared key are set, otherwise uses OIDC mode.
+
 ## Migration from legacy Log Analytics auth
 
-This action now uses GitHub OIDC with Microsoft Entra ID and sends records to an existing DCR/DCE endpoint.
-The previous shared-key ingestion flow is no longer used.
+This action supports both forwarding approaches:
+
+- Legacy Log Analytics shared-key ingestion.
+- OIDC with Microsoft Entra ID to an existing DCR/DCE endpoint.
 
 Environment variable migration:
 

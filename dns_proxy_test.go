@@ -282,6 +282,19 @@ func TestFilterDns_SentinelDisabled_DCEHostFiltered(t *testing.T) {
 	}
 }
 
+func TestFilterDns_LegacyWorkspaceHost_Excluded(t *testing.T) {
+	cfg := newDiscardLogger()
+	cfg.ForwardToSentinel = true
+	cfg.SentinelForwardingMode = SentinelForwardingModeLegacy
+	cfg.LogAnalyticsWorkspaceId = "myworkspace"
+	cfg.SafeList = []string{"other.com"}
+	req := newDNSQuery("myworkspace.ods.opinsights.azure.com", layers.DNSTypeA)
+
+	if filterDns(req, cfg) {
+		t.Error("legacy Sentinel workspace host should never be filtered")
+	}
+}
+
 func TestFilterDns_Blocklist_SafelistTakesPrecedence(t *testing.T) {
 	// When SafeList is active, BlockList is ignored entirely.
 	cfg := newDiscardLogger()

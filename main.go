@@ -12,6 +12,9 @@ func main() {
 		Strs("safelist", config.SafeList).
 		Str("upstream_server", config.UpstreamServer).
 		Bool("forward_to_sentinel", config.ForwardToSentinel).
+		Str("sentinel_forwarding_mode", config.SentinelForwardingMode).
+		Str("log_analytics_workspace_id", config.LogAnalyticsWorkspaceId).
+		Str("log_analytics_table", config.LogAnalyticsTable).
 		Str("sentinel_tenant_id", config.SentinelTenantID).
 		Str("sentinel_client_id", config.SentinelClientID).
 		Str("sentinel_dce_uri", config.SentinelDCEURI).

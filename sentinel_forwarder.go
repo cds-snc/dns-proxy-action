@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,12 +19,7 @@ type SentinelForwarder struct {
 	config *Config
 }
 
-func buildSentinelPayload(p []byte) ([]byte, error) {
-	var evt map[string]any
-	if err := json.Unmarshal(p, &evt); err != nil {
-		return nil, err
-	}
-
+func enrichWithGitHubContext(evt map[string]any) {
 	evt["actor"] = os.Getenv("GITHUB_ACTOR")
 	evt["eventName"] = os.Getenv("GITHUB_EVENT_NAME")
 	evt["job"] = os.Getenv("GITHUB_JOB")
@@ -30,10 +28,42 @@ func buildSentinelPayload(p []byte) ([]byte, error) {
 	evt["sha"] = os.Getenv("GITHUB_SHA")
 	evt["workflow"] = os.Getenv("GITHUB_WORKFLOW")
 	evt["workflow_ref"] = os.Getenv("GITHUB_REF")
+}
+
+func buildOIDCSentinelPayload(p []byte) ([]byte, error) {
+	var evt map[string]any
+	if err := json.Unmarshal(p, &evt); err != nil {
+		return nil, err
+	}
+
+	enrichWithGitHubContext(evt)
 
 	// DCR ingestion expects an array of JSON records.
 	records := []map[string]any{evt}
 	return json.Marshal(records)
+}
+
+func buildLegacySentinelPayload(p []byte) ([]byte, error) {
+	var evt map[string]any
+	if err := json.Unmarshal(p, &evt); err != nil {
+		return nil, err
+	}
+
+	enrichWithGitHubContext(evt)
+	return json.Marshal(evt)
+}
+
+func buildSignature(customerID, sharedKey, date, contentLength, method, contentType, resource string) (string, error) {
+	xHeaders := "x-ms-date:" + date
+	stringToHash := method + "\n" + contentLength + "\n" + contentType + "\n" + xHeaders + "\n" + resource
+	decodedKey, err := base64.StdEncoding.DecodeString(sharedKey)
+	if err != nil {
+		return "", err
+	}
+	hash := hmac.New(sha256.New, decodedKey)
+	hash.Write([]byte(stringToHash))
+	encodedHash := base64.StdEncoding.EncodeToString(hash.Sum(nil))
+	return fmt.Sprintf("SharedKey %s:%s", customerID, encodedHash), nil
 }
 
 func getGitHubOIDCToken(audience string) (string, error) {
@@ -102,7 +132,7 @@ func getAzureMonitorAccessToken(config *Config) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 1000 * time.Minute}
+	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -131,51 +161,106 @@ func buildIngestionURI(config *Config) string {
 	return strings.TrimRight(config.SentinelDCEURI, "/") + "/dataCollectionRules/" + config.SentinelDCRImmutableID + "/streams/" + config.SentinelStreamName + "?api-version=2023-01-01"
 }
 
-func (w SentinelForwarder) Write(p []byte) (n int, err error) {
-	if w.config.ForwardToSentinel && bytes.Contains(p, []byte("\"domain\":")) {
-		if w.config.SentinelTenantID == "" || w.config.SentinelClientID == "" || w.config.SentinelDCEURI == "" || w.config.SentinelDCRImmutableID == "" || w.config.SentinelStreamName == "" {
-			fmt.Println("Sentinel forwarding is enabled, but required OIDC/DCR settings are missing")
-			return len(p), nil
-		}
+func buildLegacyIngestionURI(config *Config) string {
+	return fmt.Sprintf("https://%s.ods.opinsights.azure.com/api/logs?api-version=2016-04-01", config.LogAnalyticsWorkspaceId)
+}
 
-		q, err := buildSentinelPayload(p)
-		if err != nil {
-			fmt.Println("Error preparing Sentinel payload:", err)
-			return 0, err
-		}
-
-		accessToken, err := getAzureMonitorAccessToken(w.config)
-		if err != nil {
-			fmt.Println("Error getting Azure access token:", err)
-			return 0, err
-		}
-
-		uri := buildIngestionURI(w.config)
-
-		client := &http.Client{Timeout: 10 * time.Second}
-
-		req, err := http.NewRequest("POST", uri, bytes.NewReader(q))
-		if err != nil {
-			fmt.Println("Error creating request:", err)
-			return 0, err
-		}
-
-		req.Header.Set("content-type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+accessToken)
-
-		response, err := client.Do(req)
-		if err != nil {
-			fmt.Println("Error sending request:", err)
-			return 0, err
-		}
-		defer response.Body.Close()
-
-		if response.StatusCode >= 200 && response.StatusCode <= 299 {
-			return len(p), err
-		} else {
-			fmt.Println("Response code:", response.StatusCode)
-			return 0, err
-		}
+func (w SentinelForwarder) writeLegacy(p []byte) (n int, err error) {
+	if w.config.LogAnalyticsWorkspaceId == "" || w.config.LogAnalyticsSharedKey == "" || w.config.LogAnalyticsTable == "" {
+		fmt.Println("Sentinel forwarding is enabled (legacy mode), but required Log Analytics settings are missing")
+		return len(p), nil
 	}
-	return len(p), nil
+
+	q, err := buildLegacySentinelPayload(p)
+	if err != nil {
+		fmt.Println("Error preparing legacy Sentinel payload:", err)
+		return 0, err
+	}
+
+	rfc1123Date := time.Now().UTC().Format(time.RFC1123)
+	rfc1123Date = rfc1123Date[:len(rfc1123Date)-3] + "GMT"
+	signature, err := buildSignature(w.config.LogAnalyticsWorkspaceId, w.config.LogAnalyticsSharedKey, rfc1123Date, fmt.Sprint(len(q)), http.MethodPost, "application/json", "/api/logs")
+	if err != nil {
+		fmt.Println("Error building legacy signature:", err)
+		return 0, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, buildLegacyIngestionURI(w.config), bytes.NewReader(q))
+	if err != nil {
+		fmt.Println("Error creating legacy request:", err)
+		return 0, err
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Authorization", signature)
+	req.Header.Set("Log-Type", w.config.LogAnalyticsTable)
+	req.Header.Set("x-ms-date", rfc1123Date)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error sending legacy request:", err)
+		return 0, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode >= 200 && response.StatusCode <= 299 {
+		return len(p), nil
+	}
+
+	fmt.Println("Legacy response code:", response.StatusCode)
+	return 0, nil
+}
+
+func (w SentinelForwarder) writeOIDC(p []byte) (n int, err error) {
+	if w.config.SentinelTenantID == "" || w.config.SentinelClientID == "" || w.config.SentinelDCEURI == "" || w.config.SentinelDCRImmutableID == "" || w.config.SentinelStreamName == "" {
+		fmt.Println("Sentinel forwarding is enabled (oidc mode), but required OIDC/DCR settings are missing")
+		return len(p), nil
+	}
+
+	q, err := buildOIDCSentinelPayload(p)
+	if err != nil {
+		fmt.Println("Error preparing Sentinel payload:", err)
+		return 0, err
+	}
+
+	accessToken, err := getAzureMonitorAccessToken(w.config)
+	if err != nil {
+		fmt.Println("Error getting Azure access token:", err)
+		return 0, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, buildIngestionURI(w.config), bytes.NewReader(q))
+	if err != nil {
+		fmt.Println("Error creating request:", err)
+		return 0, err
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	response, err := client.Do(req)
+	if err != nil {
+		fmt.Println("Error sending request:", err)
+		return 0, err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode >= 200 && response.StatusCode <= 299 {
+		return len(p), nil
+	}
+
+	fmt.Println("Response code:", response.StatusCode)
+	return 0, nil
+}
+
+func (w SentinelForwarder) Write(p []byte) (n int, err error) {
+	if !w.config.ForwardToSentinel || !bytes.Contains(p, []byte("\"domain\":")) {
+		return len(p), nil
+	}
+
+	if useLegacySentinelForwarding(w.config) {
+		return w.writeLegacy(p)
+	}
+
+	return w.writeOIDC(p)
 }

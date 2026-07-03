@@ -9,23 +9,55 @@ import (
 )
 
 type Config struct {
-	BlockList              []string
-	ForwardToSentinel      bool
-	Host                   string
-	LogLevel               zerolog.Level
-	Logger                 zerolog.Logger
-	OverwriteConfig        bool
-	Port                   int64
-	QueryLogFilePath       string
-	SafeList               []string
-	SentinelClientID       string
-	SentinelDCEURI         string
-	SentinelDCRImmutableID string
-	SentinelOIDCAudience   string
-	SentinelStreamName     string
-	SentinelTenantID       string
-	UpstreamServer         string
-	WildcardGreedy         bool
+	BlockList               []string
+	ForwardToSentinel       bool
+	Host                    string
+	LogAnalyticsSharedKey   string
+	LogAnalyticsTable       string
+	LogAnalyticsWorkspaceId string
+	LogLevel                zerolog.Level
+	Logger                  zerolog.Logger
+	OverwriteConfig         bool
+	Port                    int64
+	QueryLogFilePath        string
+	SafeList                []string
+	SentinelClientID        string
+	SentinelDCEURI          string
+	SentinelDCRImmutableID  string
+	SentinelForwardingMode  string
+	SentinelOIDCAudience    string
+	SentinelStreamName      string
+	SentinelTenantID        string
+	UpstreamServer          string
+	WildcardGreedy          bool
+}
+
+const (
+	SentinelForwardingModeAuto   = "auto"
+	SentinelForwardingModeLegacy = "legacy"
+	SentinelForwardingModeOIDC   = "oidc"
+)
+
+func normalizeSentinelForwardingMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case SentinelForwardingModeLegacy:
+		return SentinelForwardingModeLegacy
+	case SentinelForwardingModeOIDC:
+		return SentinelForwardingModeOIDC
+	default:
+		return SentinelForwardingModeAuto
+	}
+}
+
+func useLegacySentinelForwarding(config *Config) bool {
+	switch normalizeSentinelForwardingMode(config.SentinelForwardingMode) {
+	case SentinelForwardingModeLegacy:
+		return true
+	case SentinelForwardingModeOIDC:
+		return false
+	default:
+		return config.LogAnalyticsWorkspaceId != "" && config.LogAnalyticsSharedKey != ""
+	}
 }
 
 func initConfig() *Config {
@@ -42,12 +74,16 @@ func initConfig() *Config {
 	viper.SetDefault("UpstreamServer", "8.8.8.8")
 	viper.SetDefault("LogLevel", "info")
 	viper.SetDefault("ForwardToSentinel", false)
+	viper.SetDefault("LogAnalyticsWorkspaceId", "")
+	viper.SetDefault("LogAnalyticsSharedKey", "")
+	viper.SetDefault("LogAnalyticsTable", "GitHubMetadata_CI_DNS_Queries")
 	viper.SetDefault("SentinelTenantID", "")
 	viper.SetDefault("SentinelClientID", "")
+	viper.SetDefault("SentinelForwardingMode", SentinelForwardingModeAuto)
 	viper.SetDefault("SentinelOIDCAudience", "api://AzureADTokenExchange")
 	viper.SetDefault("SentinelDCEURI", "")
 	viper.SetDefault("SentinelDCRImmutableID", "")
-	viper.SetDefault("SentinelStreamName", "Custom-GitHubMetadata_CI_DNS_Queries_V2_Input")
+	viper.SetDefault("SentinelStreamName", "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL")
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
 	viper.SetDefault("WildcardGreedy", false)
@@ -58,8 +94,12 @@ func initConfig() *Config {
 	configuration.SafeList = parseSlice(viper.GetString("Safelist"))
 	configuration.UpstreamServer = viper.GetString("UpstreamServer")
 	configuration.ForwardToSentinel = viper.GetBool("ForwardToSentinel")
+	configuration.LogAnalyticsWorkspaceId = viper.GetString("LogAnalyticsWorkspaceId")
+	configuration.LogAnalyticsSharedKey = viper.GetString("LogAnalyticsSharedKey")
+	configuration.LogAnalyticsTable = viper.GetString("LogAnalyticsTable")
 	configuration.SentinelTenantID = viper.GetString("SentinelTenantID")
 	configuration.SentinelClientID = viper.GetString("SentinelClientID")
+	configuration.SentinelForwardingMode = normalizeSentinelForwardingMode(viper.GetString("SentinelForwardingMode"))
 	configuration.SentinelOIDCAudience = viper.GetString("SentinelOIDCAudience")
 	configuration.SentinelDCEURI = viper.GetString("SentinelDCEURI")
 	configuration.SentinelDCRImmutableID = viper.GetString("SentinelDCRImmutableID")
