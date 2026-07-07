@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -10,6 +11,24 @@ import (
 	"github.com/google/gopacket"
 	layers "github.com/google/gopacket/layers"
 )
+
+func sentinelIngestionHost(dceURI string) string {
+	if dceURI == "" {
+		return ""
+	}
+	parsed, err := url.Parse(dceURI)
+	if err == nil && parsed.Host != "" {
+		return strings.TrimSuffix(strings.ToLower(parsed.Host), ".")
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(dceURI, "https://")), ".")
+}
+
+func sentinelWorkspaceHost(workspaceID string) string {
+	if workspaceID == "" {
+		return ""
+	}
+	return strings.ToLower(workspaceID) + ".ods.opinsights.azure.com"
+}
 
 func checkWildcard(wildcard string, domain string, greedy bool) bool {
 	// Non-greedy matching: * matches one domain segment only, and the
@@ -79,8 +98,10 @@ func filterDns(request *layers.DNS, config *Config) bool {
 	// Check if the DNS request is for a domain we want to block
 	domain := string(request.Questions[0].Name)
 
-	// Check if we are forwarding to Sentinel and ignore the Sentinel domain
-	if config.ForwardToSentinel && domain == config.LogAnalyticsWorkspaceId+".ods.opinsights.azure.com" {
+	normalizedDomain := strings.TrimSuffix(strings.ToLower(domain), ".")
+
+	// If forwarding is enabled, never block DNS resolution for Sentinel ingestion domains.
+	if config.ForwardToSentinel && ((useLegacySentinelForwarding(config) && normalizedDomain == sentinelWorkspaceHost(config.LogAnalyticsWorkspaceId)) || (!useLegacySentinelForwarding(config) && sentinelIngestionHost(config.SentinelDCEURI) != "" && normalizedDomain == sentinelIngestionHost(config.SentinelDCEURI))) {
 		return false
 	}
 

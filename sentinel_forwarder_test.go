@@ -3,87 +3,265 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"testing"
 )
 
-// ─── buildSignature ───────────────────────────────────────────────────────────
+type dualModeTransport struct {
+	t *testing.T
 
-func TestBuildSignature_ReturnsSharedKeyFormat(t *testing.T) {
-	// Use a valid base64-encoded key so HMAC decoding succeeds.
-	sharedKey := base64.StdEncoding.EncodeToString([]byte("supersecret"))
-	sig := buildSignature("workspace-id", sharedKey, "Thu, 03 Apr 2026 12:00:00 GMT", "42", "POST", "application/json", "/api/logs")
+	oidcIngestCalls   int
+	legacyIngestCalls int
 
-	if !strings.HasPrefix(sig, "SharedKey workspace-id:") {
-		t.Errorf("expected signature to start with 'SharedKey workspace-id:', got %q", sig)
-	}
+	capturedOIDCHeader   http.Header
+	capturedOIDCBody     []byte
+	capturedLegacyHeader http.Header
+	capturedLegacyBody   []byte
 }
 
-func TestBuildSignature_DeterministicOutput(t *testing.T) {
-	sharedKey := base64.StdEncoding.EncodeToString([]byte("key"))
-	args := []string{"ws", sharedKey, "Mon, 01 Jan 2024 00:00:00 GMT", "10", "POST", "application/json", "/api/logs"}
+func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	m.t.Helper()
 
-	sig1 := buildSignature(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
-	sig2 := buildSignature(args[0], args[1], args[2], args[3], args[4], args[5], args[6])
+	switch {
+	case strings.Contains(req.URL.Host, "token.actions.githubusercontent.com"):
+		if req.Method != http.MethodGet {
+			m.t.Fatalf("expected GET for GitHub OIDC token request, got %s", req.Method)
+		}
+		if req.Header.Get("Authorization") != "bearer test-gh-request-token" {
+			m.t.Fatalf("unexpected GitHub token authorization header: %q", req.Header.Get("Authorization"))
+		}
+		if req.URL.Query().Get("audience") != "api://AzureADTokenExchange" {
+			m.t.Fatalf("unexpected OIDC audience: %q", req.URL.Query().Get("audience"))
+		}
+		return jsonResponse(http.StatusOK, `{"value":"github-oidc-token"}`), nil
 
-	if sig1 != sig2 {
-		t.Error("buildSignature should return the same value for identical inputs")
+	case strings.Contains(req.URL.Host, "login.microsoftonline.com"):
+		if req.Method != http.MethodPost {
+			m.t.Fatalf("expected POST for Azure token request, got %s", req.Method)
+		}
+		body, _ := io.ReadAll(req.Body)
+		values, err := url.ParseQuery(string(body))
+		if err != nil {
+			m.t.Fatalf("unable to parse Azure token form body: %v", err)
+		}
+		if values.Get("client_assertion") != "github-oidc-token" {
+			m.t.Fatalf("expected client_assertion to carry GitHub OIDC token")
+		}
+		if values.Get("scope") != "https://monitor.azure.com/.default" {
+			m.t.Fatalf("unexpected scope: %q", values.Get("scope"))
+		}
+		if values.Get("client_id") != "client-id" {
+			m.t.Fatalf("unexpected client_id: %q", values.Get("client_id"))
+		}
+		return jsonResponse(http.StatusOK, `{"access_token":"azure-access-token"}`), nil
+
+	case strings.Contains(req.URL.Host, "example-dce.eastus-1.ingest.monitor.azure.com"):
+		m.oidcIngestCalls++
+		m.capturedOIDCHeader = req.Header.Clone()
+		m.capturedOIDCBody, _ = io.ReadAll(req.Body)
+		if req.Method != http.MethodPost {
+			m.t.Fatalf("expected POST for DCR ingestion request, got %s", req.Method)
+		}
+		if !strings.Contains(req.URL.Path, "/dataCollectionRules/dcr-immutable-id/streams/Custom-GitHubMetadata_CI_DNS_Queries_V2_CL") {
+			m.t.Fatalf("unexpected ingestion path: %s", req.URL.Path)
+		}
+		return jsonResponse(http.StatusAccepted, `{}`), nil
+
+	case strings.Contains(req.URL.Host, ".ods.opinsights.azure.com"):
+		m.legacyIngestCalls++
+		m.capturedLegacyHeader = req.Header.Clone()
+		m.capturedLegacyBody, _ = io.ReadAll(req.Body)
+		if req.Method != http.MethodPost {
+			m.t.Fatalf("expected POST for legacy ingestion request, got %s", req.Method)
+		}
+		if req.URL.Path != "/api/logs" {
+			m.t.Fatalf("unexpected legacy ingestion path: %s", req.URL.Path)
+		}
+		return jsonResponse(http.StatusOK, `{}`), nil
 	}
+
+	m.t.Fatalf("unexpected request to host: %s", req.URL.Host)
+	return nil, nil
 }
 
-func TestBuildSignature_DifferentKeysDifferentSignatures(t *testing.T) {
-	key1 := base64.StdEncoding.EncodeToString([]byte("key1"))
-	key2 := base64.StdEncoding.EncodeToString([]byte("key2"))
-	date := "Mon, 01 Jan 2024 00:00:00 GMT"
-
-	sig1 := buildSignature("ws", key1, date, "10", "POST", "application/json", "/api/logs")
-	sig2 := buildSignature("ws", key2, date, "10", "POST", "application/json", "/api/logs")
-
-	if sig1 == sig2 {
-		t.Error("different keys should produce different signatures")
-	}
-}
-
-// ─── SentinelForwarder.Write ──────────────────────────────────────────────────
-
-// mockRoundTripper lets tests control the HTTP response returned by http.DefaultTransport.
-type mockRoundTripper struct {
-	statusCode int
-	body       string
-	err        error
-}
-
-func (m *mockRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
+func jsonResponse(status int, body string) *http.Response {
 	return &http.Response{
-		StatusCode: m.statusCode,
-		Body:       io.NopCloser(bytes.NewBufferString(m.body)),
+		StatusCode: status,
 		Header:     make(http.Header),
-	}, nil
+		Body:       io.NopCloser(bytes.NewBufferString(body)),
+	}
 }
 
-func setMockTransport(t *testing.T, status int) {
-	t.Helper()
-	orig := http.DefaultTransport
-	http.DefaultTransport = &mockRoundTripper{statusCode: status}
-	t.Cleanup(func() { http.DefaultTransport = orig })
+func oidcConfig() *Config {
+	return &Config{
+		ForwardToSentinel:      true,
+		SentinelForwardingMode: SentinelForwardingModeOIDC,
+		SentinelTenantID:       "tenant-id",
+		SentinelClientID:       "client-id",
+		SentinelOIDCAudience:   "api://AzureADTokenExchange",
+		SentinelDCEURI:         "https://example-dce.eastus-1.ingest.monitor.azure.com",
+		SentinelDCRImmutableID: "dcr-immutable-id",
+		SentinelStreamName:     "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL",
+	}
 }
 
-func sentinelConfig() *Config {
+func legacyConfig() *Config {
 	return &Config{
 		ForwardToSentinel:       true,
-		LogAnalyticsWorkspaceId: "test-workspace",
-		LogAnalyticsSharedKey:   base64.StdEncoding.EncodeToString([]byte("shared-secret")),
-		LogAnalyticsTable:       "TestTable",
+		SentinelForwardingMode:  SentinelForwardingModeLegacy,
+		LogAnalyticsWorkspaceId: "legacy-workspace",
+		LogAnalyticsSharedKey:   base64.StdEncoding.EncodeToString([]byte("legacy-secret")),
+		LogAnalyticsTable:       "LegacyTable",
+	}
+}
+
+func TestBuildOIDCSentinelPayload_AddsGitHubContextAndWrapsArray(t *testing.T) {
+	t.Setenv("GITHUB_ACTOR", "octocat")
+	t.Setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
+
+	payload, err := buildOIDCSentinelPayload([]byte(`{"domain":"example.com","action":"query"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var records []map[string]any
+	if err := json.Unmarshal(payload, &records); err != nil {
+		t.Fatalf("payload should be valid JSON array: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected exactly one record, got %d", len(records))
+	}
+	if records[0]["domain"] != "example.com" {
+		t.Fatalf("expected original domain field to be preserved")
+	}
+	if records[0]["actor"] != "octocat" {
+		t.Fatalf("expected GitHub actor context to be included")
+	}
+}
+
+func TestGetGitHubOIDCToken_MissingEnvironment(t *testing.T) {
+	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_URL")
+	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+
+	_, err := getGitHubOIDCToken("api://AzureADTokenExchange")
+	if err == nil {
+		t.Fatal("expected error when OIDC environment variables are missing")
+	}
+}
+
+func TestSentinelForwarder_Write_OIDCToDCRSuccess(t *testing.T) {
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.actions.githubusercontent.com/.well-known/openid-configuration?id=abc")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-gh-request-token")
+	t.Setenv("GITHUB_ACTOR", "octocat")
+	t.Setenv("GITHUB_EVENT_NAME", "push")
+	t.Setenv("GITHUB_JOB", "dns")
+	t.Setenv("GITHUB_REPOSITORY", "org/repo")
+	t.Setenv("GITHUB_RUN_NUMBER", "77")
+	t.Setenv("GITHUB_SHA", "deadbeef")
+	t.Setenv("GITHUB_WORKFLOW", "ci")
+	t.Setenv("GITHUB_REF", "refs/heads/main")
+
+	transport := &dualModeTransport{t: t}
+	orig := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	sf := SentinelForwarder{config: oidcConfig()}
+	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
+
+	n, err := sf.Write(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(p) {
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
+	}
+	if transport.oidcIngestCalls != 1 {
+		t.Fatalf("expected one OIDC ingestion call, got %d", transport.oidcIngestCalls)
+	}
+	if transport.legacyIngestCalls != 0 {
+		t.Fatalf("expected zero legacy ingestion calls, got %d", transport.legacyIngestCalls)
+	}
+	if transport.capturedOIDCHeader.Get("Authorization") != "Bearer azure-access-token" {
+		t.Fatalf("unexpected OIDC authorization header: %q", transport.capturedOIDCHeader.Get("Authorization"))
+	}
+}
+
+func TestSentinelForwarder_Write_LegacySuccess(t *testing.T) {
+	t.Setenv("GITHUB_ACTOR", "octocat")
+
+	transport := &dualModeTransport{t: t}
+	orig := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	sf := SentinelForwarder{config: legacyConfig()}
+	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
+
+	n, err := sf.Write(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(p) {
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
+	}
+	if transport.legacyIngestCalls != 1 {
+		t.Fatalf("expected one legacy ingestion call, got %d", transport.legacyIngestCalls)
+	}
+	if transport.capturedLegacyHeader.Get("Log-Type") != "LegacyTable" {
+		t.Fatalf("unexpected Log-Type header: %q", transport.capturedLegacyHeader.Get("Log-Type"))
+	}
+	if !strings.HasPrefix(transport.capturedLegacyHeader.Get("Authorization"), "SharedKey legacy-workspace:") {
+		t.Fatalf("unexpected legacy Authorization header: %q", transport.capturedLegacyHeader.Get("Authorization"))
+	}
+}
+
+func TestSentinelForwarder_Write_AutoModeUsesLegacyWhenLegacyCredsPresent(t *testing.T) {
+	cfg := legacyConfig()
+	cfg.SentinelForwardingMode = SentinelForwardingModeAuto
+
+	transport := &dualModeTransport{t: t}
+	orig := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = orig })
+
+	sf := SentinelForwarder{config: cfg}
+	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
+
+	n, err := sf.Write(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(p) {
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
+	}
+	if transport.legacyIngestCalls != 1 {
+		t.Fatalf("expected one legacy ingestion call in auto mode, got %d", transport.legacyIngestCalls)
+	}
+}
+
+func TestSentinelForwarder_Write_MissingConfigNoop(t *testing.T) {
+	cfg := oidcConfig()
+	cfg.SentinelClientID = ""
+	sf := SentinelForwarder{config: cfg}
+
+	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
+	n, err := sf.Write(p)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n != len(p) {
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
 }
 
 func TestSentinelForwarder_Write_ForwardingDisabled(t *testing.T) {
-	cfg := sentinelConfig()
+	cfg := oidcConfig()
 	cfg.ForwardToSentinel = false
 	sf := SentinelForwarder{config: cfg}
 
@@ -93,107 +271,19 @@ func TestSentinelForwarder_Write_ForwardingDisabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n != len(p) {
-		t.Errorf("expected %d bytes, got %d", len(p), n)
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
 }
 
 func TestSentinelForwarder_Write_NoDomainField(t *testing.T) {
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
+	sf := SentinelForwarder{config: oidcConfig()}
 	p := []byte(`{"level":"info","message":"startup"}` + "\n")
+
 	n, err := sf.Write(p)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if n != len(p) {
-		t.Errorf("expected %d bytes, got %d", len(p), n)
+		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
-}
-
-func TestSentinelForwarder_Write_SuccessfulPost(t *testing.T) {
-	setMockTransport(t, http.StatusOK)
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
-	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
-	n, err := sf.Write(p)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len(p) {
-		t.Errorf("expected %d bytes, got %d", len(p), n)
-	}
-}
-
-func TestSentinelForwarder_Write_Non2xxResponse(t *testing.T) {
-	setMockTransport(t, http.StatusInternalServerError)
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
-	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
-	n, err := sf.Write(p)
-	// On non-2xx, the function returns 0 with a nil error (matching production code).
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("expected 0 bytes written on non-2xx response, got %d", n)
-	}
-}
-
-func TestSentinelForwarder_Write_202Accepted(t *testing.T) {
-	setMockTransport(t, http.StatusAccepted)
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
-	p := []byte(`{"level":"info","domain":"example.com","action":"blocked"}` + "\n")
-	n, err := sf.Write(p)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if n != len(p) {
-		t.Errorf("expected %d bytes, got %d", len(p), n)
-	}
-}
-
-func TestSentinelForwarder_Write_RequestContainsDomainPayload(t *testing.T) {
-	var capturedReq *http.Request
-	orig := http.DefaultTransport
-	http.DefaultTransport = &captureTransport{
-		captured:   &capturedReq,
-		statusCode: http.StatusOK,
-	}
-	t.Cleanup(func() { http.DefaultTransport = orig })
-
-	cfg := sentinelConfig()
-	sf := SentinelForwarder{config: cfg}
-
-	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
-	sf.Write(p) //nolint:errcheck
-
-	if capturedReq == nil {
-		t.Fatal("expected an HTTP request to be made, but none was captured")
-	}
-	if capturedReq.Header.Get("Log-Type") != "TestTable" {
-		t.Errorf("Log-Type header: expected TestTable, got %q", capturedReq.Header.Get("Log-Type"))
-	}
-	if capturedReq.Method != http.MethodPost {
-		t.Errorf("expected POST method, got %q", capturedReq.Method)
-	}
-}
-
-// captureTransport records the request and returns a canned response.
-type captureTransport struct {
-	captured   **http.Request
-	statusCode int
-}
-
-func (c *captureTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	*c.captured = req
-	return &http.Response{
-		StatusCode: c.statusCode,
-		Body:       io.NopCloser(bytes.NewBufferString("")),
-		Header:     make(http.Header),
-	}, nil
 }
