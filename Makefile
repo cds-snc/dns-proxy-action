@@ -9,7 +9,7 @@ dev:
 
 release:
 	@mkdir -p release/latest
-	@docker build --platform linux/$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
+	@docker build --platform linux/$(PLATFORM) --build-arg PLATFORM=$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
 	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
 	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-$(PLATFORM)
 	@docker rm -f dns-proxy-action-build
@@ -20,7 +20,7 @@ release-all:
 
 release-test:
 	@mkdir -p release/latest
-	@docker build --platform linux/$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
+	@docker build --platform linux/$(PLATFORM) --build-arg PLATFORM=$(PLATFORM) -t dns-proxy-action-build -f Dockerfile.build .
 	@docker create -ti --name dns-proxy-action-build dns-proxy-action-build bash
 	@docker cp dns-proxy-action-build:/dns-proxy-action release/latest/dns-proxy-action-$(PLATFORM)-test
 	@docker rm -f dns-proxy-action-build
