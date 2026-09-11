@@ -2,7 +2,7 @@ module dns-proxy-action
 
 go 1.25.0
 
-toolchain go1.25.13
+toolchain go1.26.0
 
 require (
 	github.com/google/gopacket v1.1.19
