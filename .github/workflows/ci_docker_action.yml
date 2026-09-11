@@ -4,6 +4,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   ci-dns-proxy-with-docker-action:
     runs-on: ubuntu-latest

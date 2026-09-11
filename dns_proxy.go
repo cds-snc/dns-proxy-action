@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,21 +12,46 @@ import (
 	layers "github.com/google/gopacket/layers"
 )
 
-func checkWildcard(wildcard string, domain string) bool {
-	wildcardParts := strings.Split(wildcard, ".")
-	domainParts := strings.Split(domain, ".")
-
-	if len(wildcardParts) != len(domainParts) {
-		return false
+func sentinelIngestionHost(dceURI string) string {
+	if dceURI == "" {
+		return ""
 	}
+	parsed, err := url.Parse(dceURI)
+	if err == nil && parsed.Host != "" {
+		return strings.TrimSuffix(strings.ToLower(parsed.Host), ".")
+	}
+	return strings.TrimSuffix(strings.ToLower(strings.TrimPrefix(dceURI, "https://")), ".")
+}
 
-	for i, part := range wildcardParts {
-		if part != "*" && part != domainParts[i] {
+func sentinelWorkspaceHost(workspaceID string) string {
+	if workspaceID == "" {
+		return ""
+	}
+	return strings.ToLower(workspaceID) + ".ods.opinsights.azure.com"
+}
+
+func checkWildcard(wildcard string, domain string, greedy bool) bool {
+	// Non-greedy matching: * matches one domain segment only, and the
+	// number of segments must match
+	if !greedy {
+		wildcardParts := strings.Split(wildcard, ".")
+		domainParts := strings.Split(domain, ".")
+		if len(wildcardParts) != len(domainParts) {
 			return false
 		}
+		for i, part := range wildcardParts {
+			if part != "*" && part != domainParts[i] {
+				return false
+			}
+		}
+		return true
 	}
 
-	return true
+	// Greedy matching: * can match zero or more domain segments
+	escaped := regexp.QuoteMeta(wildcard)
+	regexStr := strings.ReplaceAll(escaped, `\*\.`, `([^.]+\.)*`)
+	regexStr = strings.ReplaceAll(regexStr, `\*`, `.*`)
+	return regexp.MustCompile("^" + regexStr + "$").MatchString(domain)
 }
 
 func dnsProxyServer(config *Config) {
@@ -71,8 +98,10 @@ func filterDns(request *layers.DNS, config *Config) bool {
 	// Check if the DNS request is for a domain we want to block
 	domain := string(request.Questions[0].Name)
 
-	// Check if we are forwarding to Sentinel and ignore the Sentinel domain
-	if config.ForwardToSentinel && domain == config.LogAnalyticsWorkspaceId+".ods.opinsights.azure.com" {
+	normalizedDomain := strings.TrimSuffix(strings.ToLower(domain), ".")
+
+	// If forwarding is enabled, never block DNS resolution for Sentinel ingestion domains.
+	if config.ForwardToSentinel && ((useLegacySentinelForwarding(config) && normalizedDomain == sentinelWorkspaceHost(config.LogAnalyticsWorkspaceId)) || (!useLegacySentinelForwarding(config) && sentinelIngestionHost(config.SentinelDCEURI) != "" && normalizedDomain == sentinelIngestionHost(config.SentinelDCEURI))) {
 		return false
 	}
 
@@ -84,7 +113,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 	// Check if we are using a safelist or a blocklist
 	if len(config.SafeList) > 0 {
 		for _, safeDomain := range config.SafeList {
-			if checkWildcard(safeDomain, domain) {
+			if checkWildcard(safeDomain, domain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "passed").
@@ -99,7 +128,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 		return true
 	} else {
 		for _, blockedDomain := range config.BlockList {
-			if checkWildcard(blockedDomain, domain) {
+			if checkWildcard(blockedDomain, domain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "blocked").
