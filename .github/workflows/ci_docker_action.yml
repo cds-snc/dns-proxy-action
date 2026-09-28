@@ -17,7 +17,7 @@ jobs:
         uses: ./ # Uses an action in the root directory
 
       - name: Report deployment to Sentinel
-        uses: cds-snc/sentinel-forward-data-action@34bb12f0981c9fbee774fa1acf20783dc6c99906 # main
+        uses: cds-snc/sentinel-forward-data-action@b2160a45676f8d278982d84eef9c13d780ef4e2b # main
         with:
           input_data: '{"product": "dns-proxy-action", "version": "${{ github.sha }}", "repository": "${{ github.repository }}"}'
           log_type: TestData
