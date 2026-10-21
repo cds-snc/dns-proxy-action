@@ -130,5 +130,17 @@ Workflow prerequisites:
 
 The action is a pseudo-proxy because it only performs naive checks on the domain name used in DNS resolution. It has no caching or any of the other goodies that come with a full blown DNS server. Also the patching of the `/etc/resolv.conf` file is not done in a very robust way. It is meant to be used in a GitHub Action runner environment where the `/etc/resolv.conf` file is probably not used for anything else. Hosting the proxy on `172.17.0.1` also forces any Docker containers to use the proxy.
 
+## Building releases
+
+The action runs the committed Linux binaries in `release/latest`, not the Go source.
+After changing Go source, dependencies, or the Go toolchain, run `make release-all`
+with Docker running and commit both the AMD64 and ARM64 binaries. CI rebuilds each
+architecture and checks that it matches the committed binary.
+
+Keep the Go toolchain in `go.mod`, the Go devcontainer feature version in
+`.devcontainer/devcontainer.json`, and the pinned Go builder image in
+`Dockerfile.build` aligned when updating Go. Renovate's post-upgrade task runs
+`make release-all` to refresh both binaries.
+
 ## License
 MIT
