@@ -5,7 +5,7 @@
   ],
   "postUpgradeTasks": {
     "commands": [
-      "make release-all"
+      "make release"
     ]
   }
 }
