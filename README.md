@@ -137,10 +137,12 @@ After changing Go source, dependencies, or the Go toolchain, run `make release-a
 with Docker running and commit both the AMD64 and ARM64 binaries. CI rebuilds each
 architecture and checks that it matches the committed binary.
 
-Keep the Go toolchain in `go.mod`, the Go devcontainer feature version in
+Keep the `go` directive in `go.mod`, the Go devcontainer feature version in
 `.devcontainer/devcontainer.json`, and the pinned Go builder image in
-`Dockerfile.build` aligned when updating Go. Renovate's post-upgrade task runs
-`make release-all` to refresh both binaries.
+`Dockerfile.build` aligned when updating Go. The binary's standard library comes
+from the builder image, while the `go` directive sets the minimum toolchain and
+the default `GODEBUG` behaviour embedded in the binary. Renovate's post-upgrade
+task runs `make release-all` to refresh both binaries.
 
 ## License
 MIT
