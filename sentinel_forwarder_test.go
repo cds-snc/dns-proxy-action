@@ -67,7 +67,7 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		if req.Method != http.MethodPost {
 			m.t.Fatalf("expected POST for DCR ingestion request, got %s", req.Method)
 		}
-		if !strings.Contains(req.URL.Path, "/dataCollectionRules/dcr-immutable-id/streams/Custom-GitHubMetadata_CI_DNS_Queries_V2_CL") {
+		if !strings.Contains(req.URL.Path, "/dataCollectionRules/dcr-immutable-id/streams/Custom-GitHubMetadata_CI_DNS_Queries_V2_Input") {
 			m.t.Fatalf("unexpected ingestion path: %s", req.URL.Path)
 		}
 		return jsonResponse(http.StatusAccepted, `{}`), nil
@@ -106,7 +106,7 @@ func oidcConfig() *Config {
 		SentinelOIDCAudience:   "api://AzureADTokenExchange",
 		SentinelDCEURI:         "https://example-dce.eastus-1.ingest.monitor.azure.com",
 		SentinelDCRImmutableID: "dcr-immutable-id",
-		SentinelStreamName:     "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL",
+		SentinelStreamName:     "Custom-GitHubMetadata_CI_DNS_Queries_V2_Input",
 	}
 }
 
