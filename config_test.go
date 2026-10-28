@@ -45,8 +45,8 @@ func TestInitConfig_Defaults(t *testing.T) {
 	if config.LogAnalyticsTable != "GitHubMetadata_CI_DNS_Queries" {
 		t.Errorf("LogAnalyticsTable: expected GitHubMetadata_CI_DNS_Queries, got %q", config.LogAnalyticsTable)
 	}
-	if config.SentinelStreamName != "Custom-GitHubMetadata_CI_DNS_Queries_V2_CL" {
-		t.Errorf("SentinelStreamName: expected Custom-GitHubMetadata_CI_DNS_Queries_V2_CL, got %q", config.SentinelStreamName)
+	if config.SentinelStreamName != "Custom-GitHubMetadata_CI_DNS_Queries_V2_Input" {
+		t.Errorf("SentinelStreamName: expected Custom-GitHubMetadata_CI_DNS_Queries_V2_Input, got %q", config.SentinelStreamName)
 	}
 	if config.SentinelOIDCAudience != "api://AzureADTokenExchange" {
 		t.Errorf("SentinelOIDCAudience: expected api://AzureADTokenExchange, got %q", config.SentinelOIDCAudience)

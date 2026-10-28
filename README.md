@@ -24,7 +24,7 @@ The action is configured through the following environment variables:
 | `DNS_PROXY_SENTINELOIDCAUDIENCE` | Audience used when requesting GitHub OIDC token | `api://AzureADTokenExchange` |
 | `DNS_PROXY_SENTINELDCEURI` | Existing Data Collection Endpoint ingestion URI (for example `https://<dce>.ingest.monitor.azure.com`) | |
 | `DNS_PROXY_SENTINELDCRIMMUTABLEID` | Existing DCR immutable ID | |
-| `DNS_PROXY_SENTINELSTREAMNAME` | Stream name defined in the DCR | `Custom-GitHubMetadata_CI_DNS_Queries_V2_CL` |
+| `DNS_PROXY_SENTINELSTREAMNAME` | Input stream name declared in the DCR (not the `_CL` output table) | `Custom-GitHubMetadata_CI_DNS_Queries_V2_Input` |
 | `DNS_PROXY_OVERWRITECONFIG` | Whether to overwrite the DNS configuration on the host | `true` |
 | `DNS_PROXY_QUERYLOGFILEPATH` | The path to the query log file | `/tmp/dns_query.log` |
 | `DNS_PROXY_WILDCARDGREEDY` | `*` character behaviour for safe and block lists (greedy `*` matches zero or more domain labels while non-greedy only matches one label) | `false` |
@@ -81,7 +81,7 @@ Forwarding DNS requests to Microsoft Sentinel using OIDC and an existing DCR/DCE
     DNS_PROXY_SENTINELCLIENTID: ${{ vars.AZURE_CLIENT_ID }}
     DNS_PROXY_SENTINELDCEURI: ${{ vars.SENTINEL_DCE_URI }}
     DNS_PROXY_SENTINELDCRIMMUTABLEID: ${{ vars.SENTINEL_DCR_IMMUTABLE_ID }}
-    DNS_PROXY_SENTINELSTREAMNAME: Custom-GitHubMetadata_CI_DNS_Queries_V2_CL
+    DNS_PROXY_SENTINELSTREAMNAME: Custom-GitHubMetadata_CI_DNS_Queries_V2_Input
 ```
 
 Make sure the workflow grants `id-token: write` permission so the action can request a GitHub OIDC token.
@@ -105,7 +105,7 @@ Environment variable migration:
 | --- | --- | --- |
 | `DNS_PROXY_LOGANALYTICSWORKSPACEID` | `DNS_PROXY_SENTINELDCEURI`, `DNS_PROXY_SENTINELDCRIMMUTABLEID`, `DNS_PROXY_SENTINELSTREAMNAME` | Destination is now explicit DCE + DCR stream instead of workspace `/api/logs`. |
 | `DNS_PROXY_LOGANALYTICSSHAREDKEY` | None | Shared keys are replaced by OIDC token exchange. |
-| `DNS_PROXY_LOGANALYTICSTABLE` | `DNS_PROXY_SENTINELSTREAMNAME` | Use the DCR stream name (for example `Custom-GitHubMetadata_CI_DNS_Queries_V2_CL`). |
+| `DNS_PROXY_LOGANALYTICSTABLE` | `DNS_PROXY_SENTINELSTREAMNAME` | Use the DCR input stream name (for example `Custom-GitHubMetadata_CI_DNS_Queries_V2_Input`), not the `_CL` output table name. |
 
 New required identity settings when `DNS_PROXY_FORWARDTOSENTINEL=true`:
 
