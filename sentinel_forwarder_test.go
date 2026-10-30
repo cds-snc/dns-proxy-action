@@ -10,11 +10,13 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 type dualModeTransport struct {
 	t *testing.T
 
+	azureTokenCalls   int
 	oidcIngestCalls   int
 	legacyIngestCalls int
 
@@ -30,45 +32,46 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	switch {
 	case strings.Contains(req.URL.Host, "token.actions.githubusercontent.com"):
 		if req.Method != http.MethodGet {
-			m.t.Fatalf("expected GET for GitHub OIDC token request, got %s", req.Method)
+			m.t.Errorf("expected GET for GitHub OIDC token request, got %s", req.Method)
 		}
 		if req.Header.Get("Authorization") != "bearer test-gh-request-token" {
-			m.t.Fatalf("unexpected GitHub token authorization header: %q", req.Header.Get("Authorization"))
+			m.t.Errorf("unexpected GitHub token authorization header: %q", req.Header.Get("Authorization"))
 		}
 		if req.URL.Query().Get("audience") != "api://AzureADTokenExchange" {
-			m.t.Fatalf("unexpected OIDC audience: %q", req.URL.Query().Get("audience"))
+			m.t.Errorf("unexpected OIDC audience: %q", req.URL.Query().Get("audience"))
 		}
 		return jsonResponse(http.StatusOK, `{"value":"github-oidc-token"}`), nil
 
 	case strings.Contains(req.URL.Host, "login.microsoftonline.com"):
 		if req.Method != http.MethodPost {
-			m.t.Fatalf("expected POST for Azure token request, got %s", req.Method)
+			m.t.Errorf("expected POST for Azure token request, got %s", req.Method)
 		}
 		body, _ := io.ReadAll(req.Body)
 		values, err := url.ParseQuery(string(body))
 		if err != nil {
-			m.t.Fatalf("unable to parse Azure token form body: %v", err)
+			m.t.Errorf("unable to parse Azure token form body: %v", err)
 		}
 		if values.Get("client_assertion") != "github-oidc-token" {
-			m.t.Fatalf("expected client_assertion to carry GitHub OIDC token")
+			m.t.Errorf("expected client_assertion to carry GitHub OIDC token")
 		}
 		if values.Get("scope") != "https://monitor.azure.com/.default" {
-			m.t.Fatalf("unexpected scope: %q", values.Get("scope"))
+			m.t.Errorf("unexpected scope: %q", values.Get("scope"))
 		}
 		if values.Get("client_id") != "client-id" {
-			m.t.Fatalf("unexpected client_id: %q", values.Get("client_id"))
+			m.t.Errorf("unexpected client_id: %q", values.Get("client_id"))
 		}
-		return jsonResponse(http.StatusOK, `{"access_token":"azure-access-token"}`), nil
+		m.azureTokenCalls++
+		return jsonResponse(http.StatusOK, `{"access_token":"azure-access-token","expires_in":3599}`), nil
 
 	case strings.Contains(req.URL.Host, "example-dce.eastus-1.ingest.monitor.azure.com"):
 		m.oidcIngestCalls++
 		m.capturedOIDCHeader = req.Header.Clone()
 		m.capturedOIDCBody, _ = io.ReadAll(req.Body)
 		if req.Method != http.MethodPost {
-			m.t.Fatalf("expected POST for DCR ingestion request, got %s", req.Method)
+			m.t.Errorf("expected POST for DCR ingestion request, got %s", req.Method)
 		}
 		if !strings.Contains(req.URL.Path, "/dataCollectionRules/dcr-immutable-id/streams/Custom-GitHubMetadata_CI_DNS_Queries_V2_Input") {
-			m.t.Fatalf("unexpected ingestion path: %s", req.URL.Path)
+			m.t.Errorf("unexpected ingestion path: %s", req.URL.Path)
 		}
 		return jsonResponse(http.StatusAccepted, `{}`), nil
 
@@ -77,16 +80,26 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		m.capturedLegacyHeader = req.Header.Clone()
 		m.capturedLegacyBody, _ = io.ReadAll(req.Body)
 		if req.Method != http.MethodPost {
-			m.t.Fatalf("expected POST for legacy ingestion request, got %s", req.Method)
+			m.t.Errorf("expected POST for legacy ingestion request, got %s", req.Method)
 		}
 		if req.URL.Path != "/api/logs" {
-			m.t.Fatalf("unexpected legacy ingestion path: %s", req.URL.Path)
+			m.t.Errorf("unexpected legacy ingestion path: %s", req.URL.Path)
 		}
 		return jsonResponse(http.StatusOK, `{}`), nil
 	}
 
-	m.t.Fatalf("unexpected request to host: %s", req.URL.Host)
-	return nil, nil
+	m.t.Errorf("unexpected request to host: %s", req.URL.Host)
+	return jsonResponse(http.StatusNotFound, `{}`), nil
+}
+
+// newTestForwarder returns a forwarder that sends its requests through transport.
+func newTestForwarder(cfg *Config, transport http.RoundTripper) *SentinelForwarder {
+	return newSentinelForwarder(cfg, &http.Client{Transport: transport})
+}
+
+func setOIDCEnv(t *testing.T) {
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.actions.githubusercontent.com/.well-known/openid-configuration?id=abc")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-gh-request-token")
 }
 
 func jsonResponse(status int, body string) *http.Response {
@@ -120,11 +133,11 @@ func legacyConfig() *Config {
 	}
 }
 
-func TestBuildOIDCSentinelPayload_AddsGitHubContextAndWrapsArray(t *testing.T) {
+func TestBuildSentinelPayload_AddsGitHubContextAndWrapsArray(t *testing.T) {
 	t.Setenv("GITHUB_ACTOR", "octocat")
 	t.Setenv("GITHUB_EVENT_NAME", "workflow_dispatch")
 
-	payload, err := buildOIDCSentinelPayload([]byte(`{"domain":"example.com","action":"query"}`))
+	payload, err := buildSentinelPayload([][]byte{[]byte(`{"domain":"example.com","action":"query"}`)})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -148,15 +161,14 @@ func TestGetGitHubOIDCToken_MissingEnvironment(t *testing.T) {
 	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 
-	_, err := getGitHubOIDCToken("api://AzureADTokenExchange")
+	_, err := getGitHubOIDCToken(http.DefaultClient, "api://AzureADTokenExchange")
 	if err == nil {
 		t.Fatal("expected error when OIDC environment variables are missing")
 	}
 }
 
 func TestSentinelForwarder_Write_OIDCToDCRSuccess(t *testing.T) {
-	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.actions.githubusercontent.com/.well-known/openid-configuration?id=abc")
-	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "test-gh-request-token")
+	setOIDCEnv(t)
 	t.Setenv("GITHUB_ACTOR", "octocat")
 	t.Setenv("GITHUB_EVENT_NAME", "push")
 	t.Setenv("GITHUB_JOB", "dns")
@@ -167,11 +179,7 @@ func TestSentinelForwarder_Write_OIDCToDCRSuccess(t *testing.T) {
 	t.Setenv("GITHUB_REF", "refs/heads/main")
 
 	transport := &dualModeTransport{t: t}
-	orig := http.DefaultTransport
-	http.DefaultTransport = transport
-	t.Cleanup(func() { http.DefaultTransport = orig })
-
-	sf := SentinelForwarder{config: oidcConfig()}
+	sf := newTestForwarder(oidcConfig(), transport)
 	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
 
 	n, err := sf.Write(p)
@@ -181,6 +189,7 @@ func TestSentinelForwarder_Write_OIDCToDCRSuccess(t *testing.T) {
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
+	sf.Flush(5 * time.Second)
 	if transport.oidcIngestCalls != 1 {
 		t.Fatalf("expected one OIDC ingestion call, got %d", transport.oidcIngestCalls)
 	}
@@ -196,11 +205,7 @@ func TestSentinelForwarder_Write_LegacySuccess(t *testing.T) {
 	t.Setenv("GITHUB_ACTOR", "octocat")
 
 	transport := &dualModeTransport{t: t}
-	orig := http.DefaultTransport
-	http.DefaultTransport = transport
-	t.Cleanup(func() { http.DefaultTransport = orig })
-
-	sf := SentinelForwarder{config: legacyConfig()}
+	sf := newTestForwarder(legacyConfig(), transport)
 	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
 
 	n, err := sf.Write(p)
@@ -210,6 +215,7 @@ func TestSentinelForwarder_Write_LegacySuccess(t *testing.T) {
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
+	sf.Flush(5 * time.Second)
 	if transport.legacyIngestCalls != 1 {
 		t.Fatalf("expected one legacy ingestion call, got %d", transport.legacyIngestCalls)
 	}
@@ -226,11 +232,7 @@ func TestSentinelForwarder_Write_AutoModeUsesLegacyWhenLegacyCredsPresent(t *tes
 	cfg.SentinelForwardingMode = SentinelForwardingModeAuto
 
 	transport := &dualModeTransport{t: t}
-	orig := http.DefaultTransport
-	http.DefaultTransport = transport
-	t.Cleanup(func() { http.DefaultTransport = orig })
-
-	sf := SentinelForwarder{config: cfg}
+	sf := newTestForwarder(cfg, transport)
 	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
 
 	n, err := sf.Write(p)
@@ -240,6 +242,7 @@ func TestSentinelForwarder_Write_AutoModeUsesLegacyWhenLegacyCredsPresent(t *tes
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
+	sf.Flush(5 * time.Second)
 	if transport.legacyIngestCalls != 1 {
 		t.Fatalf("expected one legacy ingestion call in auto mode, got %d", transport.legacyIngestCalls)
 	}
@@ -248,7 +251,7 @@ func TestSentinelForwarder_Write_AutoModeUsesLegacyWhenLegacyCredsPresent(t *tes
 func TestSentinelForwarder_Write_MissingConfigNoop(t *testing.T) {
 	cfg := oidcConfig()
 	cfg.SentinelClientID = ""
-	sf := SentinelForwarder{config: cfg}
+	sf := newTestForwarder(cfg, &dualModeTransport{t: t})
 
 	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
 	n, err := sf.Write(p)
@@ -263,7 +266,7 @@ func TestSentinelForwarder_Write_MissingConfigNoop(t *testing.T) {
 func TestSentinelForwarder_Write_ForwardingDisabled(t *testing.T) {
 	cfg := oidcConfig()
 	cfg.ForwardToSentinel = false
-	sf := SentinelForwarder{config: cfg}
+	sf := newTestForwarder(cfg, &dualModeTransport{t: t})
 
 	p := []byte(`{"level":"info","domain":"example.com"}` + "\n")
 	n, err := sf.Write(p)
@@ -276,7 +279,7 @@ func TestSentinelForwarder_Write_ForwardingDisabled(t *testing.T) {
 }
 
 func TestSentinelForwarder_Write_NoDomainField(t *testing.T) {
-	sf := SentinelForwarder{config: oidcConfig()}
+	sf := newTestForwarder(oidcConfig(), &dualModeTransport{t: t})
 	p := []byte(`{"level":"info","message":"startup"}` + "\n")
 
 	n, err := sf.Write(p)
@@ -285,5 +288,108 @@ func TestSentinelForwarder_Write_NoDomainField(t *testing.T) {
 	}
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
+	}
+}
+
+func TestSentinelForwarder_Write_BatchesRecords(t *testing.T) {
+	setOIDCEnv(t)
+
+	transport := &dualModeTransport{t: t}
+	sf := newTestForwarder(oidcConfig(), transport)
+	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
+		sf.Write([]byte(`{"level":"info","domain":"` + domain + `","action":"query"}` + "\n"))
+	}
+	sf.Flush(5 * time.Second)
+
+	if transport.oidcIngestCalls != 1 {
+		t.Fatalf("expected one OIDC ingestion call for the batch, got %d", transport.oidcIngestCalls)
+	}
+	var records []map[string]any
+	if err := json.Unmarshal(transport.capturedOIDCBody, &records); err != nil {
+		t.Fatalf("payload should be valid JSON array: %v", err)
+	}
+	if len(records) != 3 {
+		t.Fatalf("expected 3 records in the batch, got %d", len(records))
+	}
+}
+
+func TestSentinelForwarder_Write_SplitsLargeBatches(t *testing.T) {
+	setOIDCEnv(t)
+
+	transport := &dualModeTransport{t: t}
+	sf := newTestForwarder(oidcConfig(), transport)
+	for range sentinelBatchSize + 1 {
+		sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	}
+	sf.Flush(5 * time.Second)
+
+	if transport.oidcIngestCalls != 2 {
+		t.Fatalf("expected two OIDC ingestion calls, got %d", transport.oidcIngestCalls)
+	}
+}
+
+func TestSentinelForwarder_Write_CachesAccessToken(t *testing.T) {
+	setOIDCEnv(t)
+
+	transport := &dualModeTransport{t: t}
+	sf := newTestForwarder(oidcConfig(), transport)
+	for range 2 {
+		sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+		sf.Flush(5 * time.Second)
+	}
+
+	if transport.oidcIngestCalls != 2 {
+		t.Fatalf("expected two OIDC ingestion calls, got %d", transport.oidcIngestCalls)
+	}
+	if transport.azureTokenCalls != 1 {
+		t.Fatalf("expected the Azure access token to be requested once, got %d", transport.azureTokenCalls)
+	}
+}
+
+type blockingTransport struct {
+	release chan struct{}
+}
+
+func (b *blockingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-b.release
+	return jsonResponse(http.StatusOK, `{}`), nil
+}
+
+func TestSentinelForwarder_Write_DoesNotWaitForSentinel(t *testing.T) {
+	transport := &blockingTransport{release: make(chan struct{})}
+	t.Cleanup(func() { close(transport.release) })
+	sf := newTestForwarder(legacyConfig(), transport)
+
+	done := make(chan struct{})
+	go func() {
+		for range sentinelBatchSize * 2 {
+			sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+		}
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Write blocked while a Sentinel request was in progress")
+	}
+}
+
+func TestSentinelForwarder_Write_CopiesRecord(t *testing.T) {
+	transport := &dualModeTransport{t: t}
+	sf := newTestForwarder(legacyConfig(), transport)
+
+	p := []byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n")
+	sf.Write(p)
+	// zerolog reuses its buffer after Write returns.
+	copy(p, bytes.Repeat([]byte("x"), len(p)))
+	sf.Flush(5 * time.Second)
+
+	var records []map[string]any
+	if err := json.Unmarshal(transport.capturedLegacyBody, &records); err != nil {
+		t.Fatalf("payload should be valid JSON array: %v", err)
+	}
+	if len(records) != 1 || records[0]["domain"] != "example.com" {
+		t.Fatalf("expected the original record to be sent, got %v", records)
 	}
 }

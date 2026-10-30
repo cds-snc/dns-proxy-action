@@ -1,0 +1,109 @@
+name: CI Sentinel OIDC forwarding
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - action.yml
+      - release/latest/**
+      - .github/workflows/ci_sentinel_oidc.yml
+
+permissions:
+  contents: read
+
+jobs:
+  ci-sentinel-oidc:
+    # Fork pull requests get neither the secrets nor an OIDC token.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    strategy:
+      matrix:
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+
+      - name: Start DNS proxy with OIDC forwarding
+        uses: ./
+        env:
+          DNS_PROXY_FORWARDTOSENTINEL: "true"
+          DNS_PROXY_SENTINELFORWARDINGMODE: "oidc"
+          DNS_PROXY_SENTINELTENANTID: ${{ vars.SENTINEL_FORWARDER_V2_GITHUB_ACTIONS_TENANT_ID }}
+          DNS_PROXY_SENTINELCLIENTID: ${{ vars.SENTINEL_FORWARDER_V2_GITHUB_ACTIONS_CLIENT_ID }}
+          DNS_PROXY_SENTINELDCEURI: ${{ secrets.SENTINEL_DCE_ENDPOINT }}
+          DNS_PROXY_SENTINELDCRIMMUTABLEID: ${{ vars.SENTINEL_DCR_RULE_ID_DNS_PROXY }}
+
+      # Only look up well-known domains the CI already uses.
+      - name: Lookups return IPv4 addresses without delay
+        shell: python3 {0}
+        run: |
+          import socket, sys, time
+
+          domains = [
+              "github.com",
+              "api.github.com",
+              "objects.githubusercontent.com",
+              "releases.hashicorp.com",
+              "registry.npmjs.org",
+              "pypi.org",
+              "proxy.golang.org",
+              "archive.ubuntu.com",
+          ]
+          failures = []
+          for attempt in range(3):
+              for domain in domains:
+                  start = time.monotonic()
+                  try:
+                      # Asks for A and AAAA together, like the clients in #157.
+                      results = socket.getaddrinfo(domain, 443, type=socket.SOCK_STREAM)
+                  except socket.gaierror as e:
+                      failures.append(f"{domain}: lookup failed: {e}")
+                      continue
+                  ms = (time.monotonic() - start) * 1000
+                  families = sorted({r[0].name for r in results})
+                  print(f"{domain}: {ms:.0f} ms {families}")
+                  if socket.AF_INET not in {r[0] for r in results}:
+                      failures.append(f"{domain}: no IPv4 address returned")
+                  if ms > 1000:
+                      failures.append(f"{domain}: lookup took {ms:.0f} ms")
+
+          if failures:
+              print("\n".join(failures))
+              sys.exit(1)
+
+      - name: Forwarder sent records without errors
+        run: |
+          # Let the forwarder send its last batch.
+          sleep 3
+          records=$(grep -c '"domain":' /tmp/dns_query.log || true)
+          echo "Records logged: $records"
+          if [ "$records" -eq 0 ]; then
+            echo "No DNS records were logged"
+            exit 1
+          fi
+          if grep -E "Error (getting|sending|creating|preparing)|Response code:|queue is full|settings are missing" /tmp/dns-proxy-action.out; then
+            echo "Sentinel forwarder reported errors"
+            exit 1
+          fi
+
+      - name: Forwarder lookups bypass the proxy
+        run: |
+          if grep -i "login.microsoftonline.com" /tmp/dns_query.log; then
+            echo "The forwarder's token lookup went through the proxy"
+            exit 1
+          fi
+
+      - name: cat DNS
+        if: failure()
+        run: cat /tmp/dns-proxy-action.out
+
+      - name: cat output file
+        if: failure()
+        run: cat /tmp/dns_query.log
