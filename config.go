@@ -24,6 +24,7 @@ type Config struct {
 	SentinelClientID        string
 	SentinelDCEURI          string
 	SentinelDCRImmutableID  string
+	SentinelForwarder       *SentinelForwarder
 	SentinelForwardingMode  string
 	SentinelOIDCAudience    string
 	SentinelStreamName      string
@@ -129,7 +130,8 @@ func initConfig() *Config {
 	zerolog.SetGlobalLevel(configuration.LogLevel)
 
 	// Create multiple output steams for zerolog
-	multi := zerolog.MultiLevelWriter(QueryLogger{config: &configuration}, SentinelForwarder{config: &configuration}, zerolog.ConsoleWriter{Out: os.Stderr})
+	configuration.SentinelForwarder = NewSentinelForwarder(&configuration)
+	multi := zerolog.MultiLevelWriter(QueryLogger{config: &configuration}, configuration.SentinelForwarder, zerolog.ConsoleWriter{Out: os.Stderr})
 
 	logger := zerolog.New(multi).With().Timestamp().Logger()
 

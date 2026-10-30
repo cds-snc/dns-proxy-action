@@ -1,5 +1,12 @@
 package main
 
+import (
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
 func main() {
 	// Initialize configuration
 	config := initConfig()
@@ -24,6 +31,15 @@ func main() {
 		Str("query_log_file_path", config.QueryLogFilePath).
 		Bool("wildcardgreedy", config.WildcardGreedy).
 		Msg("Configuration")
+
+	// Send queued Sentinel records before exiting
+	go func() {
+		signals := make(chan os.Signal, 1)
+		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+		<-signals
+		config.SentinelForwarder.Flush(5 * time.Second)
+		os.Exit(0)
+	}()
 
 	// Install the proxy server as the default DNS resolver
 	if config.OverwriteConfig {

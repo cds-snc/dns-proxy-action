@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,8 +17,66 @@ import (
 	"time"
 )
 
+const (
+	// Records are sent in batches so a DNS answer never waits on Sentinel.
+	sentinelBatchSize     = 100
+	sentinelFlushInterval = time.Second
+	sentinelQueueSize     = 10000
+
+	// Refresh the Azure access token this long before it expires.
+	sentinelTokenRefreshMargin = 5 * time.Minute
+)
+
 type SentinelForwarder struct {
 	config *Config
+	client *http.Client
+	queue  chan []byte
+	flush  chan chan struct{}
+
+	// Only used by the worker goroutine.
+	accessToken          string
+	accessTokenRefreshAt time.Time
+}
+
+func NewSentinelForwarder(config *Config) *SentinelForwarder {
+	return newSentinelForwarder(config, newUpstreamHTTPClient(config))
+}
+
+func newSentinelForwarder(config *Config, client *http.Client) *SentinelForwarder {
+	w := &SentinelForwarder{
+		config: config,
+		client: client,
+		queue:  make(chan []byte, sentinelQueueSize),
+		flush:  make(chan chan struct{}),
+	}
+	go w.run()
+	return w
+}
+
+// newUpstreamHTTPClient returns a client that resolves hostnames with the
+// upstream DNS server directly. The system resolver points at this proxy, so
+// using it would log the forwarder's own lookups and send those to Sentinel
+// as well, which in turn triggers more lookups.
+func newUpstreamHTTPClient(config *Config) *http.Client {
+	upstreamAddr := fmt.Sprintf("%s:53", config.UpstreamServer)
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+		Resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, network, upstreamAddr)
+			},
+		},
+	}
+	transport := &http.Transport{
+		Proxy:               http.ProxyFromEnvironment,
+		DialContext:         dialer.DialContext,
+		ForceAttemptHTTP2:   true,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: transport}
 }
 
 func enrichWithGitHubContext(evt map[string]any) {
@@ -30,27 +90,24 @@ func enrichWithGitHubContext(evt map[string]any) {
 	evt["workflow_ref"] = os.Getenv("GITHUB_REF")
 }
 
-func buildOIDCSentinelPayload(p []byte) ([]byte, error) {
-	var evt map[string]any
-	if err := json.Unmarshal(p, &evt); err != nil {
-		return nil, err
+// buildSentinelPayload returns the records as a JSON array, which both the
+// DCR ingestion API and the legacy Data Collector API accept. Records that
+// are not valid JSON are skipped.
+func buildSentinelPayload(lines [][]byte) ([]byte, error) {
+	records := []map[string]any{}
+	for _, p := range lines {
+		var evt map[string]any
+		if err := json.Unmarshal(p, &evt); err != nil {
+			fmt.Println("Error decoding Sentinel record:", err)
+			continue
+		}
+		enrichWithGitHubContext(evt)
+		records = append(records, evt)
 	}
-
-	enrichWithGitHubContext(evt)
-
-	// DCR ingestion expects an array of JSON records.
-	records := []map[string]any{evt}
+	if len(records) == 0 {
+		return nil, fmt.Errorf("no valid records to send")
+	}
 	return json.Marshal(records)
-}
-
-func buildLegacySentinelPayload(p []byte) ([]byte, error) {
-	var evt map[string]any
-	if err := json.Unmarshal(p, &evt); err != nil {
-		return nil, err
-	}
-
-	enrichWithGitHubContext(evt)
-	return json.Marshal(evt)
 }
 
 func buildSignature(customerID, sharedKey, date, contentLength, method, contentType, resource string) (string, error) {
@@ -66,7 +123,7 @@ func buildSignature(customerID, sharedKey, date, contentLength, method, contentT
 	return fmt.Sprintf("SharedKey %s:%s", customerID, encodedHash), nil
 }
 
-func getGitHubOIDCToken(audience string) (string, error) {
+func getGitHubOIDCToken(client *http.Client, audience string) (string, error) {
 	requestURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	requestToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if requestURL == "" || requestToken == "" {
@@ -87,7 +144,6 @@ func getGitHubOIDCToken(audience string) (string, error) {
 	}
 	req.Header.Set("Authorization", "bearer "+requestToken)
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -112,10 +168,11 @@ func getGitHubOIDCToken(audience string) (string, error) {
 	return tokenResponse.Value, nil
 }
 
-func getAzureMonitorAccessToken(config *Config) (string, error) {
-	oidcToken, err := getGitHubOIDCToken(config.SentinelOIDCAudience)
+// getAzureMonitorAccessToken returns an access token and how long it is valid for.
+func getAzureMonitorAccessToken(client *http.Client, config *Config) (string, time.Duration, error) {
+	oidcToken, err := getGitHubOIDCToken(client, config.SentinelOIDCAudience)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	form := url.Values{}
@@ -128,33 +185,49 @@ func getAzureMonitorAccessToken(config *Config) (string, error) {
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", config.SentinelTenantID)
 	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("Azure token request failed with status %d: %s", resp.StatusCode, string(body))
+		return "", 0, fmt.Errorf("Azure token request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	var tokenResponse struct {
 		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResponse); err != nil {
-		return "", err
+		return "", 0, err
 	}
 	if tokenResponse.AccessToken == "" {
-		return "", fmt.Errorf("Azure token response did not include access_token")
+		return "", 0, fmt.Errorf("Azure token response did not include access_token")
 	}
 
-	return tokenResponse.AccessToken, nil
+	return tokenResponse.AccessToken, time.Duration(tokenResponse.ExpiresIn) * time.Second, nil
+}
+
+// cachedAccessToken returns the cached Azure access token, requesting a new
+// one when there is none or it is about to expire.
+func (w *SentinelForwarder) cachedAccessToken() (string, error) {
+	if w.accessToken != "" && time.Now().Before(w.accessTokenRefreshAt) {
+		return w.accessToken, nil
+	}
+
+	token, expiresIn, err := getAzureMonitorAccessToken(w.client, w.config)
+	if err != nil {
+		return "", err
+	}
+	w.accessToken = token
+	w.accessTokenRefreshAt = time.Now().Add(expiresIn - sentinelTokenRefreshMargin)
+	return token, nil
 }
 
 func buildIngestionURI(config *Config) string {
@@ -165,16 +238,16 @@ func buildLegacyIngestionURI(config *Config) string {
 	return fmt.Sprintf("https://%s.ods.opinsights.azure.com/api/logs?api-version=2016-04-01", config.LogAnalyticsWorkspaceId)
 }
 
-func (w SentinelForwarder) writeLegacy(p []byte) (n int, err error) {
+func (w *SentinelForwarder) sendLegacy(lines [][]byte) error {
 	if w.config.LogAnalyticsWorkspaceId == "" || w.config.LogAnalyticsSharedKey == "" || w.config.LogAnalyticsTable == "" {
 		fmt.Println("Sentinel forwarding is enabled (legacy mode), but required Log Analytics settings are missing")
-		return len(p), nil
+		return nil
 	}
 
-	q, err := buildLegacySentinelPayload(p)
+	q, err := buildSentinelPayload(lines)
 	if err != nil {
 		fmt.Println("Error preparing legacy Sentinel payload:", err)
-		return 0, err
+		return err
 	}
 
 	rfc1123Date := time.Now().UTC().Format(time.RFC1123)
@@ -182,85 +255,153 @@ func (w SentinelForwarder) writeLegacy(p []byte) (n int, err error) {
 	signature, err := buildSignature(w.config.LogAnalyticsWorkspaceId, w.config.LogAnalyticsSharedKey, rfc1123Date, fmt.Sprint(len(q)), http.MethodPost, "application/json", "/api/logs")
 	if err != nil {
 		fmt.Println("Error building legacy signature:", err)
-		return 0, err
+		return err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, buildLegacyIngestionURI(w.config), bytes.NewReader(q))
 	if err != nil {
 		fmt.Println("Error creating legacy request:", err)
-		return 0, err
+		return err
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Authorization", signature)
 	req.Header.Set("Log-Type", w.config.LogAnalyticsTable)
 	req.Header.Set("x-ms-date", rfc1123Date)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Do(req)
+	response, err := w.client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending legacy request:", err)
-		return 0, err
+		return err
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode >= 200 && response.StatusCode <= 299 {
-		return len(p), nil
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		fmt.Println("Legacy response code:", response.StatusCode)
 	}
-
-	fmt.Println("Legacy response code:", response.StatusCode)
-	return 0, nil
+	return nil
 }
 
-func (w SentinelForwarder) writeOIDC(p []byte) (n int, err error) {
+func (w *SentinelForwarder) sendOIDC(lines [][]byte) error {
 	if w.config.SentinelTenantID == "" || w.config.SentinelClientID == "" || w.config.SentinelDCEURI == "" || w.config.SentinelDCRImmutableID == "" || w.config.SentinelStreamName == "" {
 		fmt.Println("Sentinel forwarding is enabled (oidc mode), but required OIDC/DCR settings are missing")
-		return len(p), nil
+		return nil
 	}
 
-	q, err := buildOIDCSentinelPayload(p)
+	q, err := buildSentinelPayload(lines)
 	if err != nil {
 		fmt.Println("Error preparing Sentinel payload:", err)
-		return 0, err
+		return err
 	}
 
-	accessToken, err := getAzureMonitorAccessToken(w.config)
+	accessToken, err := w.cachedAccessToken()
 	if err != nil {
 		fmt.Println("Error getting Azure access token:", err)
-		return 0, err
+		return err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, buildIngestionURI(w.config), bytes.NewReader(q))
 	if err != nil {
 		fmt.Println("Error creating request:", err)
-		return 0, err
+		return err
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
-	client := &http.Client{Timeout: 10 * time.Second}
-	response, err := client.Do(req)
+	response, err := w.client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending request:", err)
-		return 0, err
+		return err
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode >= 200 && response.StatusCode <= 299 {
-		return len(p), nil
+	if response.StatusCode == http.StatusUnauthorized {
+		// Request a new token for the next batch.
+		w.accessToken = ""
 	}
-
-	fmt.Println("Response code:", response.StatusCode)
-	return 0, nil
+	if response.StatusCode < 200 || response.StatusCode > 299 {
+		fmt.Println("Response code:", response.StatusCode)
+	}
+	return nil
 }
 
-func (w SentinelForwarder) Write(p []byte) (n int, err error) {
+func (w *SentinelForwarder) send(lines [][]byte) {
+	if len(lines) == 0 {
+		return
+	}
+	if useLegacySentinelForwarding(w.config) {
+		w.sendLegacy(lines)
+		return
+	}
+	w.sendOIDC(lines)
+}
+
+// sendInBatches sends the records sentinelBatchSize at a time.
+func (w *SentinelForwarder) sendInBatches(lines [][]byte) {
+	for len(lines) > 0 {
+		n := min(len(lines), sentinelBatchSize)
+		w.send(lines[:n])
+		lines = lines[n:]
+	}
+}
+
+func (w *SentinelForwarder) run() {
+	ticker := time.NewTicker(sentinelFlushInterval)
+	defer ticker.Stop()
+
+	var batch [][]byte
+	for {
+		select {
+		case record := <-w.queue:
+			batch = append(batch, record)
+			if len(batch) >= sentinelBatchSize {
+				w.send(batch)
+				batch = nil
+			}
+		case <-ticker.C:
+			w.send(batch)
+			batch = nil
+		case done := <-w.flush:
+			for drained := false; !drained; {
+				select {
+				case record := <-w.queue:
+					batch = append(batch, record)
+				default:
+					drained = true
+				}
+			}
+			w.sendInBatches(batch)
+			batch = nil
+			close(done)
+		}
+	}
+}
+
+// Flush sends every queued record, waiting at most timeout for it to finish.
+func (w *SentinelForwarder) Flush(timeout time.Duration) {
+	done := make(chan struct{})
+	select {
+	case w.flush <- done:
+	case <-time.After(timeout):
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(timeout):
+	}
+}
+
+// Write queues the record for the worker and returns straight away, so the
+// DNS answer is not held up by requests to Sentinel.
+func (w *SentinelForwarder) Write(p []byte) (n int, err error) {
 	if !w.config.ForwardToSentinel || !bytes.Contains(p, []byte("\"domain\":")) {
 		return len(p), nil
 	}
 
-	if useLegacySentinelForwarding(w.config) {
-		return w.writeLegacy(p)
+	// zerolog reuses p once Write returns, so queue a copy.
+	select {
+	case w.queue <- bytes.Clone(p):
+	default:
+		fmt.Println("Sentinel forwarding queue is full, dropping record")
 	}
-
-	return w.writeOIDC(p)
+	return len(p), nil
 }
