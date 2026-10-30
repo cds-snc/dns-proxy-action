@@ -3,7 +3,13 @@ on:
   pull_request:
     branches:
       - main
-  workflow_dispatch:
+    paths:
+      - "**.go"
+      - go.mod
+      - go.sum
+      - action.yml
+      - release/latest/**
+      - .github/workflows/ci_sentinel_oidc.yml
 
 permissions:
   contents: read
@@ -11,7 +17,7 @@ permissions:
 jobs:
   ci-sentinel-oidc:
     # Fork pull requests get neither the secrets nor an OIDC token.
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository
     strategy:
       matrix:
         runner:
