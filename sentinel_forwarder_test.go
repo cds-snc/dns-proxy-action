@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -19,6 +20,9 @@ type dualModeTransport struct {
 	azureTokenCalls   int
 	oidcIngestCalls   int
 	legacyIngestCalls int
+
+	// Status codes returned by successive ingestion calls; 2xx once empty.
+	ingestStatuses []int
 
 	capturedOIDCHeader   http.Header
 	capturedOIDCBody     []byte
@@ -65,6 +69,9 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 	case strings.Contains(req.URL.Host, "example-dce.eastus-1.ingest.monitor.azure.com"):
 		m.oidcIngestCalls++
+		if status, ok := m.nextIngestStatus(); ok {
+			return jsonResponse(status, `{}`), nil
+		}
 		m.capturedOIDCHeader = req.Header.Clone()
 		m.capturedOIDCBody, _ = io.ReadAll(req.Body)
 		if req.Method != http.MethodPost {
@@ -77,6 +84,9 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 	case strings.Contains(req.URL.Host, ".ods.opinsights.azure.com"):
 		m.legacyIngestCalls++
+		if status, ok := m.nextIngestStatus(); ok {
+			return jsonResponse(status, `{}`), nil
+		}
 		m.capturedLegacyHeader = req.Header.Clone()
 		m.capturedLegacyBody, _ = io.ReadAll(req.Body)
 		if req.Method != http.MethodPost {
@@ -90,6 +100,15 @@ func (m *dualModeTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 	m.t.Errorf("unexpected request to host: %s", req.URL.Host)
 	return jsonResponse(http.StatusNotFound, `{}`), nil
+}
+
+func (m *dualModeTransport) nextIngestStatus() (int, bool) {
+	if len(m.ingestStatuses) == 0 {
+		return 0, false
+	}
+	status := m.ingestStatuses[0]
+	m.ingestStatuses = m.ingestStatuses[1:]
+	return status, true
 }
 
 // newTestForwarder returns a forwarder that sends its requests through transport.
@@ -161,7 +180,7 @@ func TestGetGitHubOIDCToken_MissingEnvironment(t *testing.T) {
 	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	_ = os.Unsetenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 
-	_, err := getGitHubOIDCToken(http.DefaultClient, "api://AzureADTokenExchange")
+	_, err := getGitHubOIDCToken(context.Background(), http.DefaultClient, "api://AzureADTokenExchange")
 	if err == nil {
 		t.Fatal("expected error when OIDC environment variables are missing")
 	}
@@ -189,7 +208,7 @@ func TestSentinelForwarder_Write_OIDCToDCRSuccess(t *testing.T) {
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 	if transport.oidcIngestCalls != 1 {
 		t.Fatalf("expected one OIDC ingestion call, got %d", transport.oidcIngestCalls)
 	}
@@ -215,7 +234,7 @@ func TestSentinelForwarder_Write_LegacySuccess(t *testing.T) {
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 	if transport.legacyIngestCalls != 1 {
 		t.Fatalf("expected one legacy ingestion call, got %d", transport.legacyIngestCalls)
 	}
@@ -242,7 +261,7 @@ func TestSentinelForwarder_Write_AutoModeUsesLegacyWhenLegacyCredsPresent(t *tes
 	if n != len(p) {
 		t.Fatalf("expected %d bytes written, got %d", len(p), n)
 	}
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 	if transport.legacyIngestCalls != 1 {
 		t.Fatalf("expected one legacy ingestion call in auto mode, got %d", transport.legacyIngestCalls)
 	}
@@ -299,7 +318,7 @@ func TestSentinelForwarder_Write_BatchesRecords(t *testing.T) {
 	for _, domain := range []string{"a.example.com", "b.example.com", "c.example.com"} {
 		sf.Write([]byte(`{"level":"info","domain":"` + domain + `","action":"query"}` + "\n"))
 	}
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 
 	if transport.oidcIngestCalls != 1 {
 		t.Fatalf("expected one OIDC ingestion call for the batch, got %d", transport.oidcIngestCalls)
@@ -321,7 +340,7 @@ func TestSentinelForwarder_Write_SplitsLargeBatches(t *testing.T) {
 	for range sentinelBatchSize + 1 {
 		sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
 	}
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 
 	if transport.oidcIngestCalls != 2 {
 		t.Fatalf("expected two OIDC ingestion calls, got %d", transport.oidcIngestCalls)
@@ -335,7 +354,7 @@ func TestSentinelForwarder_Write_CachesAccessToken(t *testing.T) {
 	sf := newTestForwarder(oidcConfig(), transport)
 	for range 2 {
 		sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
-		sf.Flush(5 * time.Second)
+		sf.flushQueue(time.After(5 * time.Second))
 	}
 
 	if transport.oidcIngestCalls != 2 {
@@ -351,8 +370,12 @@ type blockingTransport struct {
 }
 
 func (b *blockingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	<-b.release
-	return jsonResponse(http.StatusOK, `{}`), nil
+	select {
+	case <-b.release:
+		return jsonResponse(http.StatusOK, `{}`), nil
+	case <-req.Context().Done():
+		return nil, req.Context().Err()
+	}
 }
 
 func TestSentinelForwarder_Write_DoesNotWaitForSentinel(t *testing.T) {
@@ -383,7 +406,7 @@ func TestSentinelForwarder_Write_CopiesRecord(t *testing.T) {
 	sf.Write(p)
 	// zerolog reuses its buffer after Write returns.
 	copy(p, bytes.Repeat([]byte("x"), len(p)))
-	sf.Flush(5 * time.Second)
+	sf.Shutdown(5 * time.Second)
 
 	var records []map[string]any
 	if err := json.Unmarshal(transport.capturedLegacyBody, &records); err != nil {
@@ -391,5 +414,87 @@ func TestSentinelForwarder_Write_CopiesRecord(t *testing.T) {
 	}
 	if len(records) != 1 || records[0]["domain"] != "example.com" {
 		t.Fatalf("expected the original record to be sent, got %v", records)
+	}
+}
+
+func TestSentinelForwarder_RetriesWithNewTokenAfter401(t *testing.T) {
+	setOIDCEnv(t)
+
+	transport := &dualModeTransport{t: t, ingestStatuses: []int{http.StatusUnauthorized}}
+	sf := newTestForwarder(oidcConfig(), transport)
+	sf.retryBackoff = time.Millisecond
+	sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	sf.Shutdown(5 * time.Second)
+
+	if transport.oidcIngestCalls != 2 {
+		t.Fatalf("expected the batch to be sent again after a 401, got %d ingestion calls", transport.oidcIngestCalls)
+	}
+	if transport.azureTokenCalls != 2 {
+		t.Fatalf("expected a new access token after a 401, got %d token calls", transport.azureTokenCalls)
+	}
+	if len(transport.capturedOIDCBody) == 0 {
+		t.Fatal("expected the retried batch to be sent")
+	}
+}
+
+func TestSentinelForwarder_RetriesServerErrorsThenDrops(t *testing.T) {
+	transport := &dualModeTransport{t: t, ingestStatuses: []int{500, 503, 429, 500}}
+	sf := newTestForwarder(legacyConfig(), transport)
+	sf.retryBackoff = time.Millisecond
+	sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	sf.Shutdown(5 * time.Second)
+
+	if transport.legacyIngestCalls != sentinelMaxAttempts {
+		t.Fatalf("expected %d attempts, got %d", sentinelMaxAttempts, transport.legacyIngestCalls)
+	}
+	if sf.pending.Load() != 0 {
+		t.Fatalf("expected no pending records after the batch was dropped, got %d", sf.pending.Load())
+	}
+}
+
+func TestSentinelForwarder_DoesNotRetryClientErrors(t *testing.T) {
+	transport := &dualModeTransport{t: t, ingestStatuses: []int{http.StatusBadRequest}}
+	sf := newTestForwarder(legacyConfig(), transport)
+	sf.retryBackoff = time.Millisecond
+	sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	sf.Shutdown(5 * time.Second)
+
+	if transport.legacyIngestCalls != 1 {
+		t.Fatalf("expected one attempt for a 400 response, got %d", transport.legacyIngestCalls)
+	}
+}
+
+func TestSentinelForwarder_ShutdownReturnsByDeadline(t *testing.T) {
+	transport := &blockingTransport{release: make(chan struct{})}
+	t.Cleanup(func() { close(transport.release) })
+	sf := newTestForwarder(legacyConfig(), transport)
+
+	// Fill a batch so the worker is stuck sending when Shutdown starts.
+	for range sentinelBatchSize + 5 {
+		sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	timeout := 200 * time.Millisecond
+	start := time.Now()
+	sf.Shutdown(timeout)
+	if elapsed := time.Since(start); elapsed > timeout+100*time.Millisecond {
+		t.Fatalf("Shutdown took %s, expected at most about %s", elapsed, timeout)
+	}
+	if sf.ctx.Err() == nil {
+		t.Fatal("expected in-progress requests to be cancelled at the deadline")
+	}
+}
+
+func TestSentinelForwarder_WriteAfterShutdownIsNotQueued(t *testing.T) {
+	sf := newTestForwarder(legacyConfig(), &dualModeTransport{t: t})
+	sf.Shutdown(5 * time.Second)
+
+	sf.Write([]byte(`{"level":"info","domain":"example.com","action":"query"}` + "\n"))
+	if len(sf.queue) != 0 || sf.pending.Load() != 0 {
+		t.Fatal("expected records written after Shutdown to be rejected")
+	}
+	if sf.rejected.Load() != 1 {
+		t.Fatalf("expected one rejected record, got %d", sf.rejected.Load())
 	}
 }

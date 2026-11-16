@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -14,6 +15,8 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,13 +28,55 @@ const (
 
 	// Refresh the Azure access token this long before it expires.
 	sentinelTokenRefreshMargin = 5 * time.Minute
+
+	// A batch that fails with a retryable error is sent up to this many
+	// times, waiting sentinelRetryBackoff (doubled each time) in between.
+	sentinelMaxAttempts  = 3
+	sentinelRetryBackoff = time.Second
 )
+
+// permanentError marks a send failure that retrying will not fix.
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+// statusError returns an error for a non-2xx response. Only 401 (handled by
+// requesting a new token), 408, 429 and 5xx are worth retrying.
+func statusError(prefix string, resp *http.Response) error {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	err := fmt.Errorf("%s failed with status %d: %s", prefix, resp.StatusCode, strings.TrimSpace(string(body)))
+	switch {
+	case resp.StatusCode == http.StatusUnauthorized,
+		resp.StatusCode == http.StatusRequestTimeout,
+		resp.StatusCode == http.StatusTooManyRequests,
+		resp.StatusCode >= 500:
+		return err
+	}
+	return permanentError{err}
+}
 
 type SentinelForwarder struct {
 	config *Config
 	client *http.Client
 	queue  chan []byte
 	flush  chan chan struct{}
+
+	retryBackoff time.Duration
+
+	// ctx is cancelled when the shutdown deadline passes, which aborts any
+	// request or retry wait still in progress.
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// closed stops Write from queueing records once shutdown has started.
+	mu     sync.RWMutex
+	closed bool
+
+	// pending counts records that were queued but not yet sent or dropped.
+	pending atomic.Int64
+	// rejected counts records that arrived after shutdown started.
+	rejected atomic.Int64
 
 	// Only used by the worker goroutine.
 	accessToken          string
@@ -43,11 +88,16 @@ func NewSentinelForwarder(config *Config) *SentinelForwarder {
 }
 
 func newSentinelForwarder(config *Config, client *http.Client) *SentinelForwarder {
+	ctx, cancel := context.WithCancel(context.Background())
 	w := &SentinelForwarder{
 		config: config,
 		client: client,
 		queue:  make(chan []byte, sentinelQueueSize),
 		flush:  make(chan chan struct{}),
+		ctx:    ctx,
+		cancel: cancel,
+
+		retryBackoff: sentinelRetryBackoff,
 	}
 	go w.run()
 	return w
@@ -123,11 +173,11 @@ func buildSignature(customerID, sharedKey, date, contentLength, method, contentT
 	return fmt.Sprintf("SharedKey %s:%s", customerID, encodedHash), nil
 }
 
-func getGitHubOIDCToken(client *http.Client, audience string) (string, error) {
+func getGitHubOIDCToken(ctx context.Context, client *http.Client, audience string) (string, error) {
 	requestURL := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL")
 	requestToken := os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
 	if requestURL == "" || requestToken == "" {
-		return "", fmt.Errorf("missing GitHub OIDC environment variables")
+		return "", permanentError{fmt.Errorf("missing GitHub OIDC environment variables")}
 	}
 
 	parsedURL, err := url.Parse(requestURL)
@@ -138,7 +188,7 @@ func getGitHubOIDCToken(client *http.Client, audience string) (string, error) {
 	query.Set("audience", audience)
 	parsedURL.RawQuery = query.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, parsedURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsedURL.String(), nil)
 	if err != nil {
 		return "", err
 	}
@@ -151,8 +201,7 @@ func getGitHubOIDCToken(client *http.Client, audience string) (string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("GitHub OIDC token request failed with status %d: %s", resp.StatusCode, string(body))
+		return "", statusError("GitHub OIDC token request", resp)
 	}
 
 	var tokenResponse struct {
@@ -169,8 +218,8 @@ func getGitHubOIDCToken(client *http.Client, audience string) (string, error) {
 }
 
 // getAzureMonitorAccessToken returns an access token and how long it is valid for.
-func getAzureMonitorAccessToken(client *http.Client, config *Config) (string, time.Duration, error) {
-	oidcToken, err := getGitHubOIDCToken(client, config.SentinelOIDCAudience)
+func getAzureMonitorAccessToken(ctx context.Context, client *http.Client, config *Config) (string, time.Duration, error) {
+	oidcToken, err := getGitHubOIDCToken(ctx, client, config.SentinelOIDCAudience)
 	if err != nil {
 		return "", 0, err
 	}
@@ -183,7 +232,7 @@ func getAzureMonitorAccessToken(client *http.Client, config *Config) (string, ti
 	form.Set("client_assertion", oidcToken)
 
 	tokenURL := fmt.Sprintf("https://login.microsoftonline.com/%s/oauth2/v2.0/token", config.SentinelTenantID)
-	req, err := http.NewRequest(http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", 0, err
 	}
@@ -196,8 +245,7 @@ func getAzureMonitorAccessToken(client *http.Client, config *Config) (string, ti
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", 0, fmt.Errorf("Azure token request failed with status %d: %s", resp.StatusCode, string(body))
+		return "", 0, statusError("Azure token request", resp)
 	}
 
 	var tokenResponse struct {
@@ -216,12 +264,12 @@ func getAzureMonitorAccessToken(client *http.Client, config *Config) (string, ti
 
 // cachedAccessToken returns the cached Azure access token, requesting a new
 // one when there is none or it is about to expire.
-func (w *SentinelForwarder) cachedAccessToken() (string, error) {
+func (w *SentinelForwarder) cachedAccessToken(ctx context.Context) (string, error) {
 	if w.accessToken != "" && time.Now().Before(w.accessTokenRefreshAt) {
 		return w.accessToken, nil
 	}
 
-	token, expiresIn, err := getAzureMonitorAccessToken(w.client, w.config)
+	token, expiresIn, err := getAzureMonitorAccessToken(ctx, w.client, w.config)
 	if err != nil {
 		return "", err
 	}
@@ -238,30 +286,28 @@ func buildLegacyIngestionURI(config *Config) string {
 	return fmt.Sprintf("https://%s.ods.opinsights.azure.com/api/logs?api-version=2016-04-01", config.LogAnalyticsWorkspaceId)
 }
 
-func (w *SentinelForwarder) sendLegacy(lines [][]byte) error {
+// sendLegacy and sendOIDC return nil on success, a permanentError when
+// retrying cannot help, and any other error when the batch should be retried.
+func (w *SentinelForwarder) sendLegacy(ctx context.Context, lines [][]byte) error {
 	if w.config.LogAnalyticsWorkspaceId == "" || w.config.LogAnalyticsSharedKey == "" || w.config.LogAnalyticsTable == "" {
-		fmt.Println("Sentinel forwarding is enabled (legacy mode), but required Log Analytics settings are missing")
-		return nil
+		return permanentError{fmt.Errorf("Sentinel forwarding is enabled (legacy mode), but required Log Analytics settings are missing")}
 	}
 
 	q, err := buildSentinelPayload(lines)
 	if err != nil {
-		fmt.Println("Error preparing legacy Sentinel payload:", err)
-		return err
+		return permanentError{fmt.Errorf("Error preparing legacy Sentinel payload: %w", err)}
 	}
 
 	rfc1123Date := time.Now().UTC().Format(time.RFC1123)
 	rfc1123Date = rfc1123Date[:len(rfc1123Date)-3] + "GMT"
 	signature, err := buildSignature(w.config.LogAnalyticsWorkspaceId, w.config.LogAnalyticsSharedKey, rfc1123Date, fmt.Sprint(len(q)), http.MethodPost, "application/json", "/api/logs")
 	if err != nil {
-		fmt.Println("Error building legacy signature:", err)
-		return err
+		return permanentError{fmt.Errorf("Error building legacy signature: %w", err)}
 	}
 
-	req, err := http.NewRequest(http.MethodPost, buildLegacyIngestionURI(w.config), bytes.NewReader(q))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, buildLegacyIngestionURI(w.config), bytes.NewReader(q))
 	if err != nil {
-		fmt.Println("Error creating legacy request:", err)
-		return err
+		return permanentError{fmt.Errorf("Error creating legacy request: %w", err)}
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Authorization", signature)
@@ -270,69 +316,95 @@ func (w *SentinelForwarder) sendLegacy(lines [][]byte) error {
 
 	response, err := w.client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending legacy request:", err)
-		return err
+		return fmt.Errorf("Error sending legacy request: %w", err)
 	}
 	defer response.Body.Close()
 
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		fmt.Println("Legacy response code:", response.StatusCode)
+		err := statusError("Legacy ingestion request", response)
+		if response.StatusCode == http.StatusUnauthorized {
+			// The shared key does not change between attempts.
+			return permanentError{err}
+		}
+		return err
 	}
 	return nil
 }
 
-func (w *SentinelForwarder) sendOIDC(lines [][]byte) error {
+func (w *SentinelForwarder) sendOIDC(ctx context.Context, lines [][]byte) error {
 	if w.config.SentinelTenantID == "" || w.config.SentinelClientID == "" || w.config.SentinelDCEURI == "" || w.config.SentinelDCRImmutableID == "" || w.config.SentinelStreamName == "" {
-		fmt.Println("Sentinel forwarding is enabled (oidc mode), but required OIDC/DCR settings are missing")
-		return nil
+		return permanentError{fmt.Errorf("Sentinel forwarding is enabled (oidc mode), but required OIDC/DCR settings are missing")}
 	}
 
 	q, err := buildSentinelPayload(lines)
 	if err != nil {
-		fmt.Println("Error preparing Sentinel payload:", err)
-		return err
+		return permanentError{fmt.Errorf("Error preparing Sentinel payload: %w", err)}
 	}
 
-	accessToken, err := w.cachedAccessToken()
+	accessToken, err := w.cachedAccessToken(ctx)
 	if err != nil {
-		fmt.Println("Error getting Azure access token:", err)
-		return err
+		return fmt.Errorf("Error getting Azure access token: %w", err)
 	}
 
-	req, err := http.NewRequest(http.MethodPost, buildIngestionURI(w.config), bytes.NewReader(q))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, buildIngestionURI(w.config), bytes.NewReader(q))
 	if err != nil {
-		fmt.Println("Error creating request:", err)
-		return err
+		return permanentError{fmt.Errorf("Error creating request: %w", err)}
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+accessToken)
 
 	response, err := w.client.Do(req)
 	if err != nil {
-		fmt.Println("Error sending request:", err)
-		return err
+		return fmt.Errorf("Error sending request: %w", err)
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode == http.StatusUnauthorized {
-		// Request a new token for the next batch.
-		w.accessToken = ""
-	}
 	if response.StatusCode < 200 || response.StatusCode > 299 {
-		fmt.Println("Response code:", response.StatusCode)
+		if response.StatusCode == http.StatusUnauthorized {
+			// Request a new token for the next attempt.
+			w.accessToken = ""
+		}
+		return statusError("Ingestion request", response)
 	}
 	return nil
 }
 
+// send sends one batch, retrying retryable failures with backoff. A batch
+// that still fails is dropped and logged, so a broken destination cannot
+// make the queue grow without limit.
 func (w *SentinelForwarder) send(lines [][]byte) {
 	if len(lines) == 0 {
 		return
 	}
-	if useLegacySentinelForwarding(w.config) {
-		w.sendLegacy(lines)
-		return
+	defer w.pending.Add(-int64(len(lines)))
+
+	backoff := w.retryBackoff
+	for attempt := 1; ; attempt++ {
+		var err error
+		if useLegacySentinelForwarding(w.config) {
+			err = w.sendLegacy(w.ctx, lines)
+		} else {
+			err = w.sendOIDC(w.ctx, lines)
+		}
+		if err == nil {
+			return
+		}
+		fmt.Printf("Error sending %d Sentinel records (attempt %d of %d): %v\n", len(lines), attempt, sentinelMaxAttempts, err)
+
+		var permanent permanentError
+		if errors.As(err, &permanent) || attempt >= sentinelMaxAttempts || w.ctx.Err() != nil {
+			fmt.Printf("Dropping %d Sentinel records that could not be sent\n", len(lines))
+			return
+		}
+
+		select {
+		case <-time.After(backoff):
+		case <-w.ctx.Done():
+			fmt.Printf("Dropping %d Sentinel records that could not be sent\n", len(lines))
+			return
+		}
+		backoff *= 2
 	}
-	w.sendOIDC(lines)
 }
 
 // sendInBatches sends the records sentinelBatchSize at a time.
@@ -376,17 +448,41 @@ func (w *SentinelForwarder) run() {
 	}
 }
 
-// Flush sends every queued record, waiting at most timeout for it to finish.
-func (w *SentinelForwarder) Flush(timeout time.Duration) {
+// flushQueue asks the worker to send every queued record and reports whether
+// it finished before deadline.
+func (w *SentinelForwarder) flushQueue(deadline <-chan time.Time) bool {
 	done := make(chan struct{})
 	select {
 	case w.flush <- done:
-	case <-time.After(timeout):
-		return
+	case <-deadline:
+		return false
 	}
 	select {
 	case <-done:
-	case <-time.After(timeout):
+		return true
+	case <-deadline:
+		return false
+	}
+}
+
+// Shutdown stops accepting records and sends the ones already queued. It
+// returns within timeout: when the deadline passes, requests in progress are
+// cancelled and the number of records that were not sent is logged.
+func (w *SentinelForwarder) Shutdown(timeout time.Duration) {
+	w.mu.Lock()
+	w.closed = true
+	w.mu.Unlock()
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	defer w.cancel()
+
+	if !w.flushQueue(deadline.C) {
+		w.cancel()
+		fmt.Printf("Sentinel shutdown timed out after %s, %d queued records were not sent\n", timeout, w.pending.Load())
+	}
+	if n := w.rejected.Load(); n > 0 {
+		fmt.Printf("%d Sentinel records arrived after shutdown started and were not sent\n", n)
 	}
 }
 
@@ -397,10 +493,19 @@ func (w *SentinelForwarder) Write(p []byte) (n int, err error) {
 		return len(p), nil
 	}
 
+	w.mu.RLock()
+	defer w.mu.RUnlock()
+	if w.closed {
+		w.rejected.Add(1)
+		return len(p), nil
+	}
+
 	// zerolog reuses p once Write returns, so queue a copy.
+	w.pending.Add(1)
 	select {
 	case w.queue <- bytes.Clone(p):
 	default:
+		w.pending.Add(-1)
 		fmt.Println("Sentinel forwarding queue is full, dropping record")
 	}
 	return len(p), nil

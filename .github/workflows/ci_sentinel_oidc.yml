@@ -8,6 +8,7 @@ on:
       - go.mod
       - go.sum
       - action.yml
+      - action/**
       - release/latest/**
       - .github/workflows/ci_sentinel_oidc.yml
 
@@ -88,7 +89,7 @@ jobs:
             echo "No DNS records were logged"
             exit 1
           fi
-          if grep -E "Error (getting|sending|creating|preparing)|Response code:|queue is full|settings are missing" /tmp/dns-proxy-action.out; then
+          if grep -E "Error (getting|sending|creating|preparing)|Dropping|not sent|queue is full|settings are missing" /tmp/dns-proxy-action.out; then
             echo "Sentinel forwarder reported errors"
             exit 1
           fi
