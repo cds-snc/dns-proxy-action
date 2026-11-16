@@ -96,7 +96,7 @@ How records are sent:
 
 - DNS records are queued and sent to Sentinel every second in batches of up to 100, so DNS answers never wait on Sentinel.
 - A batch that fails with a network error or a `408`, `429` or `5xx` response is sent up to 3 times. In OIDC mode a `401` is also retried, with a new access token. Other failures, and batches that still fail after 3 attempts, are dropped and logged in `/tmp/dns-proxy-action.out`.
-- The action's post step stops the proxy at the end of the job. The proxy then has 5 seconds to send the records it still has queued; anything not sent by then is counted in the log. Because of this the proxy stops resolving DNS during the post step, so keep this action as the first step of the job so its post step runs last.
+- The action's post step stops the proxy at the end of the job. The proxy then has 5 seconds to send the records it still has queued; anything not sent by then is counted in the log. The proxy then restores the original DNS config, so DNS lookups after the post step are no longer filtered or logged. Keep this action as the first step of the job so its post step runs last.
 
 ## Migration from legacy Log Analytics auth
 

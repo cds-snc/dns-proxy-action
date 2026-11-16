@@ -32,13 +32,16 @@ func main() {
 		Bool("wildcardgreedy", config.WildcardGreedy).
 		Msg("Configuration")
 
-	// Send queued Sentinel records before exiting. The action's post step
-	// sends SIGTERM at the end of the job.
+	// Send queued Sentinel records and put back the original DNS config
+	// before exiting. The action's post step sends SIGTERM at the end of the job.
 	go func() {
 		signals := make(chan os.Signal, 1)
 		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 		<-signals
 		config.SentinelForwarder.Shutdown(5 * time.Second)
+		if config.OverwriteConfig {
+			restoreDNS(config)
+		}
 		os.Exit(0)
 	}()
 
