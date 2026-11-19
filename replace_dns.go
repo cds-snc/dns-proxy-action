@@ -102,3 +102,37 @@ func replaceResolveDNS(config *Config) {
 		config.Logger.Debug().Msg("Flushed DNS cache")
 	}
 }
+
+// restoreDNS puts back the DNS config that replaceDNS backed up, so the
+// runner can resolve names again once the proxy stops.
+func restoreDNS(config *Config) {
+	systemDRunning := true
+	if _, err := os.Stat(systemDResolvedPath); os.IsNotExist(err) {
+		systemDRunning = false
+	}
+
+	configPath := resolvePath
+	if systemDRunning {
+		configPath = systemDResolvedPath
+	}
+
+	if _, err := os.Stat(configPath + ".bak"); err != nil {
+		config.Logger.Error().Err(err).Msg("No backup of " + configPath + " to restore")
+		return
+	}
+
+	if err := exec.Command("sudo", "cp", configPath+".bak", configPath).Run(); err != nil {
+		config.Logger.Error().Err(err).Msg("Error restoring " + configPath)
+		return
+	}
+	config.Logger.Debug().Msg("Restored " + configPath)
+
+	if systemDRunning {
+		if err := exec.Command("sudo", "systemctl", "restart", "systemd-resolved").Run(); err != nil {
+			config.Logger.Error().Err(err).Msg("Error restarting systemd-resolved")
+		}
+		if err := exec.Command("sudo", "resolvectl", "flush-caches").Run(); err != nil {
+			config.Logger.Error().Err(err).Msg("Error flushing DNS cache")
+		}
+	}
+}
