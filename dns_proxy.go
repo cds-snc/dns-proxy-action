@@ -90,13 +90,24 @@ func filterDns(request *layers.DNS, config *Config) bool {
 		return false
 	}
 
-	// Check if the DNS request is a query for an A record
-	if len(request.Questions) != 1 || request.Questions[0].Type != layers.DNSTypeA {
-		return false
+	// A query without questions has no domain to evaluate and is never legitimate.
+	if len(request.Questions) == 0 {
+		config.Logger.Warn().Str("action", "blocked").Msg("DNS request with no questions")
+		return true
 	}
 
-	// Check if the DNS request is for a domain we want to block
-	domain := string(request.Questions[0].Name)
+	// Evaluate every question (any type) so none can bypass policy or logging.
+	blocked := false
+	for _, question := range request.Questions {
+		if filterQuestion(question, config) {
+			blocked = true
+		}
+	}
+	return blocked
+}
+
+func filterQuestion(question layers.DNSQuestion, config *Config) bool {
+	domain := string(question.Name)
 
 	normalizedDomain := strings.TrimSuffix(strings.ToLower(domain), ".")
 
@@ -107,6 +118,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 
 	config.Logger.Info().
 		Str("domain", domain).
+		Str("type", question.Type.String()).
 		Str("action", "query").
 		Msg("DNS request")
 
@@ -157,7 +169,7 @@ func proxyRequest(um *net.UDPConn, clientAddr net.Addr, request *layers.DNS, con
 			RA:           false,
 			Z:            request.Z,
 			ResponseCode: layers.DNSResponseCodeNoErr,
-			QDCount:      1,
+			QDCount:      uint16(len(request.Questions)),
 			ANCount:      0,
 			NSCount:      0,
 			ARCount:      0,
