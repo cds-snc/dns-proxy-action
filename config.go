@@ -147,7 +147,8 @@ func parseSlice(s string) []string {
 	// Split on comma and newline (handle CRLF) and trim each entry. Ignore empty lines.
 	var parts []string
 	for _, p := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == '\n' || r == '\r' }) {
-		p = strings.TrimSpace(p)
+		// Domains are case-insensitive (RFC 4343); canonicalize to match filterDns.
+		p = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(p)), ".")
 		if p != "" {
 			parts = append(parts, p)
 		}
