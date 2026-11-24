@@ -202,6 +202,24 @@ func TestFilterDns_Blocklist_DomainBlocked(t *testing.T) {
 	}
 }
 
+func TestFilterDns_Blocklist_CaseInsensitive(t *testing.T) {
+	cfg := newDiscardLogger()
+	cfg.BlockList = []string{"evil.com", "*.bad.example"}
+	for _, name := range []string{"EVIL.COM", "Evil.Com.", "SUB.BAD.EXAMPLE"} {
+		if !filterDns(newDNSQuery(name, layers.DNSTypeA), cfg) {
+			t.Errorf("%q should be blocked regardless of case", name)
+		}
+	}
+}
+
+func TestFilterDns_Safelist_CaseInsensitive(t *testing.T) {
+	cfg := newDiscardLogger()
+	cfg.SafeList = []string{"good.com"}
+	if filterDns(newDNSQuery("GOOD.COM", layers.DNSTypeA), cfg) {
+		t.Error("upper-case safelisted domain should pass")
+	}
+}
+
 func TestFilterDns_Blocklist_DomainNotBlocked(t *testing.T) {
 	cfg := newDiscardLogger()
 	cfg.BlockList = []string{"evil.com"}

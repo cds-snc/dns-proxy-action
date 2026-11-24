@@ -275,6 +275,7 @@ func TestParseSlice(t *testing.T) {
 		{"spaces_only", "   ", []string{}},
 		{"leading_trailing_commas", ",a,b,", []string{"a", "b"}},
 		{"empty_lines", "\n\na\n\n", []string{"a"}},
+		{"uppercase_and_trailing_dot", "Evil.COM., *.Bad.Example", []string{"evil.com", "*.bad.example"}},
 	}
 
 	for _, tt := range tests {

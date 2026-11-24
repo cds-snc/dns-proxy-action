@@ -113,7 +113,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 	// Check if we are using a safelist or a blocklist
 	if len(config.SafeList) > 0 {
 		for _, safeDomain := range config.SafeList {
-			if checkWildcard(safeDomain, domain, config.WildcardGreedy) {
+			if checkWildcard(safeDomain, normalizedDomain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "passed").
@@ -128,7 +128,7 @@ func filterDns(request *layers.DNS, config *Config) bool {
 		return true
 	} else {
 		for _, blockedDomain := range config.BlockList {
-			if checkWildcard(blockedDomain, domain, config.WildcardGreedy) {
+			if checkWildcard(blockedDomain, normalizedDomain, config.WildcardGreedy) {
 				config.Logger.Info().
 					Str("domain", domain).
 					Str("action", "blocked").
