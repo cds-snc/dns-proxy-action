@@ -12,5 +12,22 @@ runs:
         esac
         sudo -E $GITHUB_ACTION_PATH/release/latest/$BINARY > /tmp/dns-proxy-action.out 2>&1 &
       shell: bash
-    - run: sleep 3
+    - run: |
+        sleep 3
+        failed=false
+        if ! pgrep -f 'release/latest/dns-proxy-action-' > /dev/null; then
+          failed=true
+        elif grep -qE 'Error (writing to|restarting systemd-resolved)' /tmp/dns-proxy-action.out; then
+          failed=true
+        fi
+        if [ "$failed" = true ]; then
+          cat /tmp/dns-proxy-action.out
+          case "${DNS_PROXY_FAILONERROR,,}" in
+            true|t|1)
+              echo "::error::DNS proxy is not active"
+              exit 1 ;;
+            *)
+              echo "::warning::DNS proxy is not active; DNS filtering and auditing are disabled for this job" ;;
+          esac
+        fi
       shell: bash
