@@ -63,6 +63,20 @@ func TestInitConfig_Defaults(t *testing.T) {
 	if config.WildcardGreedy {
 		t.Error("WildcardGreedy: expected false by default")
 	}
+	if config.FailOnError {
+		t.Error("FailOnError: expected false by default")
+	}
+}
+
+func TestInitConfig_FailOnErrorTrue(t *testing.T) {
+	resetViper(t)
+	t.Setenv("DNS_PROXY_FAILONERROR", "true")
+
+	config := initConfig()
+
+	if !config.FailOnError {
+		t.Error("FailOnError: expected true")
+	}
 }
 
 func TestInitConfig_HostOverride(t *testing.T) {

@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	BlockList               []string
+	FailOnError             bool
 	ForwardToSentinel       bool
 	Host                    string
 	LogAnalyticsSharedKey   string
@@ -87,6 +88,7 @@ func initConfig() *Config {
 	viper.SetDefault("OverwriteConfig", true)
 	viper.SetDefault("QueryLogFilePath", "/tmp/dns_query.log")
 	viper.SetDefault("WildcardGreedy", false)
+	viper.SetDefault("FailOnError", false)
 
 	configuration.Host = viper.GetString("Host")
 	configuration.Port = viper.GetInt64("Port")
@@ -107,6 +109,7 @@ func initConfig() *Config {
 	configuration.OverwriteConfig = viper.GetBool("OverwriteConfig")
 	configuration.QueryLogFilePath = viper.GetString("QueryLogFilePath")
 	configuration.WildcardGreedy = viper.GetBool("WildcardGreedy")
+	configuration.FailOnError = viper.GetBool("FailOnError")
 
 	// Log Level switch
 	switch strings.ToLower(viper.GetString("LogLevel")) {

@@ -28,6 +28,7 @@ The action is configured through the following environment variables:
 | `DNS_PROXY_OVERWRITECONFIG` | Whether to overwrite the DNS configuration on the host | `true` |
 | `DNS_PROXY_QUERYLOGFILEPATH` | The path to the query log file | `/tmp/dns_query.log` |
 | `DNS_PROXY_WILDCARDGREEDY` | `*` character behaviour for safe and block lists (greedy `*` matches zero or more domain labels while non-greedy only matches one label) | `false` |
+| `DNS_PROXY_FAILONERROR` | Fail the action if the proxy cannot become the host resolver or exits at startup. When `false`, the job continues with a warning and no DNS filtering or auditing | `false` |
 
 ## Example usage
 

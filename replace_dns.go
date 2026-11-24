@@ -61,6 +61,7 @@ func replaceResolveDNS(config *Config) {
 	cmd := exec.Command("/bin/sh", "-c", "sudo cp "+configPath+" "+configPath+".bak")
 
 	err := cmd.Run()
+	backedUp := err == nil
 	if err != nil {
 		config.Logger.Error().Err(err).Msg("Error backing up " + configPath)
 	}
@@ -75,10 +76,12 @@ func replaceResolveDNS(config *Config) {
 
 	// Write new content
 	cmd = exec.Command("sudo", "sh", "-c", "echo "+fileContent+" > "+configPath)
-	cmd.Run()
+	err = cmd.Run()
 
 	if err != nil {
-		config.Logger.Error().Err(err).Msg("Error writing to " + configPath)
+		restoreResolver(config, configPath, systemDRunning, backedUp)
+		resolverFailed(config, err, "Error writing to "+configPath)
+		return
 	}
 	config.Logger.Debug().Msg("Wrote to " + configPath)
 
@@ -88,7 +91,9 @@ func replaceResolveDNS(config *Config) {
 
 		err = cmd.Run()
 		if err != nil {
-			config.Logger.Error().Err(err).Msg("Error restarting systemd-resolved")
+			restoreResolver(config, configPath, systemDRunning, backedUp)
+			resolverFailed(config, err, "Error restarting systemd-resolved")
+			return
 		}
 		config.Logger.Debug().Msg("Restarted systemd-resolved")
 
@@ -100,5 +105,29 @@ func replaceResolveDNS(config *Config) {
 			config.Logger.Error().Err(err).Msg("Error flushing DNS cache")
 		}
 		config.Logger.Debug().Msg("Flushed DNS cache")
+	}
+}
+
+// resolverFailed exits when FailOnError is set; otherwise the proxy keeps running without being the host resolver.
+func resolverFailed(config *Config, err error, msg string) {
+	if config.FailOnError {
+		config.Logger.Fatal().Err(err).Msg(msg)
+	}
+	config.Logger.Error().Err(err).Msg(msg + "; DNS filtering and auditing are not active")
+}
+
+// restoreResolver puts the original resolver config back so a failed rewrite does not leave the runner without DNS.
+func restoreResolver(config *Config, configPath string, systemDRunning bool, backedUp bool) {
+	if backedUp {
+		cmd := exec.Command("sudo", "cp", configPath+".bak", configPath)
+		if err := cmd.Run(); err != nil {
+			config.Logger.Error().Err(err).Msg("Error restoring " + configPath)
+		}
+	}
+	if systemDRunning {
+		cmd := exec.Command("sudo", "systemctl", "restart", "systemd-resolved")
+		if err := cmd.Run(); err != nil {
+			config.Logger.Error().Err(err).Msg("Error restarting systemd-resolved during restore")
+		}
 	}
 }
