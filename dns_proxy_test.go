@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,7 +165,7 @@ func TestFilterDns_Response_NotFiltered(t *testing.T) {
 	}
 }
 
-func TestFilterDns_MultipleQuestions_NotFiltered(t *testing.T) {
+func TestFilterDns_MultipleQuestions_NoLists_NotFiltered(t *testing.T) {
 	cfg := newDiscardLogger()
 	req := &layers.DNS{
 		QR: false,
@@ -173,15 +175,62 @@ func TestFilterDns_MultipleQuestions_NotFiltered(t *testing.T) {
 		},
 	}
 	if filterDns(req, cfg) {
-		t.Error("request with multiple questions should not be filtered")
+		t.Error("request with multiple questions and no lists should not be filtered")
 	}
 }
 
-func TestFilterDns_NonARecord_NotFiltered(t *testing.T) {
+func TestFilterDns_MultipleQuestions_AnyBlocked(t *testing.T) {
 	cfg := newDiscardLogger()
-	req := newDNSQuery("example.com", layers.DNSTypeAAAA)
-	if filterDns(req, cfg) {
-		t.Error("non-A record query should not be filtered")
+	cfg.BlockList = []string{"evil.com"}
+	req := &layers.DNS{
+		QR: false,
+		Questions: []layers.DNSQuestion{
+			{Name: []byte("good.com"), Type: layers.DNSTypeA},
+			{Name: []byte("evil.com"), Type: layers.DNSTypeA},
+		},
+	}
+	if !filterDns(req, cfg) {
+		t.Error("request containing a blocked question should be filtered")
+	}
+}
+
+func TestFilterDns_NoQuestions_Blocked(t *testing.T) {
+	cfg := newDiscardLogger()
+	if !filterDns(&layers.DNS{QR: false}, cfg) {
+		t.Error("query without questions should be filtered")
+	}
+}
+
+func TestFilterDns_NonARecord_BlocklistApplies(t *testing.T) {
+	for _, qtype := range []layers.DNSType{layers.DNSTypeAAAA, layers.DNSTypeTXT, layers.DNSTypeCNAME, layers.DNSType(65)} {
+		cfg := newDiscardLogger()
+		cfg.BlockList = []string{"evil.com"}
+		if !filterDns(newDNSQuery("evil.com", qtype), cfg) {
+			t.Errorf("%s query for blocked domain should be filtered", qtype)
+		}
+		if filterDns(newDNSQuery("good.com", qtype), cfg) {
+			t.Errorf("%s query for unlisted domain should pass", qtype)
+		}
+	}
+}
+
+func TestFilterDns_NonARecord_SafelistApplies(t *testing.T) {
+	cfg := newDiscardLogger()
+	cfg.SafeList = []string{"good.com"}
+	if !filterDns(newDNSQuery("attacker.example", layers.DNSTypeTXT), cfg) {
+		t.Error("TXT query outside safelist should be filtered")
+	}
+	if filterDns(newDNSQuery("good.com", layers.DNSTypeAAAA), cfg) {
+		t.Error("AAAA query inside safelist should pass")
+	}
+}
+
+func TestFilterDns_NonARecord_Logged(t *testing.T) {
+	var buf bytes.Buffer
+	cfg := &Config{Logger: zerolog.New(&buf)}
+	filterDns(newDNSQuery("example.com", layers.DNSTypeTXT), cfg)
+	if !strings.Contains(buf.String(), `"domain":"example.com"`) {
+		t.Errorf("expected domain-tagged log event, got %q", buf.String())
 	}
 }
 
@@ -365,5 +414,51 @@ func TestProxyRequest_BlockedResponse(t *testing.T) {
 	}
 	if resp.ANCount != 0 {
 		t.Errorf("expected ANCount 0 for blocked response, got %d", resp.ANCount)
+	}
+}
+
+// Wire-level check: a multi-question AAAA/TXT query for a blocked domain is blocked, not forwarded.
+func TestProxyRequest_BlockedNonAMultiQuestion_Wire(t *testing.T) {
+	recvConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("failed to create recv socket: %v", err)
+	}
+	defer recvConn.Close()
+	sendConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 0})
+	if err != nil {
+		t.Fatalf("failed to create send socket: %v", err)
+	}
+	defer sendConn.Close()
+
+	var logBuf bytes.Buffer
+	cfg := &Config{Logger: zerolog.New(&logBuf), BlockList: []string{"evil.com"}}
+
+	wireReq := &layers.DNS{
+		ID: 0x4321, RD: true, QDCount: 2,
+		Questions: []layers.DNSQuestion{
+			{Name: []byte("good.com"), Type: layers.DNSTypeAAAA, Class: layers.DNSClassIN},
+			{Name: []byte("evil.com"), Type: layers.DNSTypeTXT, Class: layers.DNSClassIN},
+		},
+	}
+	sb := gopacket.NewSerializeBuffer()
+	if err := gopacket.SerializeLayers(sb, gopacket.SerializeOptions{FixLengths: true}, wireReq); err != nil {
+		t.Fatalf("serialize: %v", err)
+	}
+	parsed := gopacket.NewPacket(sb.Bytes(), layers.LayerTypeDNS, gopacket.Default).Layer(layers.LayerTypeDNS).(*layers.DNS)
+
+	proxyRequest(sendConn, recvConn.LocalAddr(), parsed, cfg)
+
+	_ = recvConn.SetReadDeadline(time.Now().Add(1 * time.Second))
+	buf := make([]byte, 65535)
+	n, _, err := recvConn.ReadFrom(buf)
+	if err != nil {
+		t.Fatalf("expected a blocked response, got: %v", err)
+	}
+	resp := gopacket.NewPacket(buf[:n], layers.LayerTypeDNS, gopacket.Default).Layer(layers.LayerTypeDNS).(*layers.DNS)
+	if !resp.QR || resp.ID != 0x4321 || resp.ANCount != 0 || len(resp.Questions) != 2 {
+		t.Errorf("unexpected response: QR=%v ID=%#x AN=%d Q=%d", resp.QR, resp.ID, resp.ANCount, len(resp.Questions))
+	}
+	if !strings.Contains(logBuf.String(), `"domain":"evil.com"`) || !strings.Contains(logBuf.String(), `"action":"blocked"`) {
+		t.Errorf("expected blocked audit event for evil.com, got %q", logBuf.String())
 	}
 }
